@@ -20,6 +20,15 @@
 #define LED_PIN  GET_PIN(A, 9)
 
 
+#include "osal.h"
+#include "ecatuser.h"
+uint64 app_time_base = 0;
+uint64 ref_time_base = 0;
+uint64 sync_start_time = 0;
+int64 app_time_offset = 0;
+
+#include "tim.h"
+extern void rt_hw_stm32_tim(void);
 int main(void)
 {
     int count = 1;
@@ -34,3 +43,33 @@ int main(void)
 
     return RT_EOK;
 }
+
+void ecat_test_main(void *parameter)
+{
+    rt_kprintf("SOEM (Simple Open EtherCAT Master)\nSlaveinfo\n");
+    rt_hw_stm32_tim();
+    HAL_TIM_Base_Start_IT(&htim4);
+    rt_thread_mdelay(100);
+    ecat_init();
+}
+
+int ecat_start(void)
+{
+    rt_thread_t tid;
+    tid = rt_thread_create("ecat_test",
+                           ecat_test_main,
+                           RT_NULL,
+                           1024 * 8,
+                           5,
+                           2);
+    if (tid != RT_NULL)
+    {
+        rt_thread_startup(tid);
+    }
+    else
+    {
+        rt_kprintf("state = -RT_ERROR\n");
+    }
+    return 0;
+}
+MSH_CMD_EXPORT(ecat_start, "ecat_start");
