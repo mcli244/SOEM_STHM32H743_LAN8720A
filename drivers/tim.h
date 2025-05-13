@@ -49,6 +49,7 @@ void MX_TIM3_Init(void);
 /* USER CODE BEGIN Prototypes */
 uint32_t GetSec(void);
 uint32_t GetUSec(void);
+void rt_hw_stm32_tim(void);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

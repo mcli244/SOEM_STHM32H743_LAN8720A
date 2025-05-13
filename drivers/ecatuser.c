@@ -2,9 +2,21 @@
 
 #include "stdio.h"
 #include "string.h"
+#include <rtthread.h>
+#include <rtdevice.h>
+#include "drv_common.h"
 
 #include "stm32h7xx_hal.h"
 //#include "gpio.h"
+
+#include "osal.h"
+#include "ecatuser.h"
+#include "tim.h"
+
+uint64 app_time_base = 0;
+uint64 ref_time_base = 0;
+uint64 sync_start_time = 0;
+int64 app_time_offset = 0;
 
 PDO_Output *outputs1;
 PDO_Input *inputs1;
@@ -501,8 +513,7 @@ void ecat_init(void)
 
 uint8 wkc;
 int32_t start_pos = 0;
-int32_t stop_pos_relative = 131072/2;	// ���λ�ã��߰�Ȧ 131072
-int32_t step = 2;
+int32_t step_increment = 10;
 //1ms isr
 //int nihao = 1;
 void ecat_loop(void)
@@ -542,21 +553,7 @@ void ecat_loop(void)
 					break;
 				case 4:
 					 outputs1->ControlWord = 0x1f;	
-					 outputs1->TargetPos += step;
-					 if(flag==0){
-					 	if(outputs1->TargetPos > (start_pos + stop_pos_relative))
-						{
-							step = -step;
-							flag = 1;
-						}
-					}
-					 else {
-						if(outputs1->TargetPos < start_pos)
-						{
-							step = -step;
-							flag = 0;
-						}
-					 }
+					 outputs1->TargetPos += step_increment;
 					break;
 				default :
 					startup_step=1;
@@ -572,6 +569,102 @@ void ecat_loop(void)
 
 
 
+void ecat_test_main(void *parameter)
+{
+    rt_kprintf("SOEM (Simple Open EtherCAT Master)\nSlaveinfo\n");
+    rt_hw_stm32_tim();
+    HAL_TIM_Base_Start_IT(&htim4);
+    rt_thread_mdelay(100);
+    ecat_init();
+}
+
+int ecat_start(void)
+{
+    rt_thread_t tid;
+    tid = rt_thread_create("ecat_test",
+                           ecat_test_main,
+                           RT_NULL,
+                           1024 * 8,
+                           5,
+                           2);
+    if (tid != RT_NULL)
+    {
+        rt_thread_startup(tid);
+    }
+    else
+    {
+        rt_kprintf("state = -RT_ERROR\n");
+    }
+    return 0;
+}
+MSH_CMD_EXPORT(ecat_start, "ecat_start");
+
+extern uint32_t dorun;
+int show_flag = 0;
+int _do_ecat_show_rdo(void)
+{
+	show_flag = 1;
+    while (1)
+    {
+        if (dorun>0){
+			rt_kprintf("state:%d; StatusWord:%x, CurrentPosition:%ld,TargetMode:%d CurrentTorque:%d CurrentSpeed:%d ServoError:%d\r\n",
+			ec_slave[1].state, inputs1->StatusWord, inputs1->CurrentPosition,inputs1->TargetMode,
+			inputs1->CurrentTorque, inputs1->CurrentSpeed, inputs1->ServoError);
+        }
+		if(show_flag == 0)
+			break;
+        rt_thread_mdelay(1);
+    }
+
+    return RT_EOK;
+}
+int ecat_show_rdo(void)
+{
+    rt_thread_t tid;
+    tid = rt_thread_create("ecat_show_rdo",
+            _do_ecat_show_rdo,
+                           RT_NULL,
+                           1024 * 1,
+                           5,
+                           2);
+    if (tid != RT_NULL)
+    {
+        rt_thread_startup(tid);
+    }
+    else
+    {
+        rt_kprintf("state = -RT_ERROR\n");
+    }
+    return 0;
+}
+MSH_CMD_EXPORT(ecat_show_rdo, "ecat_show_rdo");
+
+int ecat_show_stop(void)
+{
+    show_flag = 0;
+    return 0;
+}
+MSH_CMD_EXPORT(ecat_show_stop, "ecat_show_stop");
+
+void ecat_set_pos(int argc, char **argv)
+{
+    if (dorun == 0)
+    {
+        rt_kprintf("ecat not runnig\r\n");
+        return ;
+    }
+
+    if (argc != 2)
+    {
+        rt_kprintf("Usage: ecat_set_pos step_increment\r\n");
+        rt_kprintf("rg: ecat_set_pos 100\r\n");
+        return ;
+    }
+
+    step_increment = atoi(argv[1]);
+    rt_kprintf("ecat_set_pos step_increment:%d\r\n", step_increment);
+}
+MSH_CMD_EXPORT(ecat_set_pos, "ecat_set_pos");
 
 
 
