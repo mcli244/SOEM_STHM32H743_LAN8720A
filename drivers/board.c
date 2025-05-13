@@ -13,19 +13,6 @@
 #include <drv_common.h>
 #include <rtdevice.h>
 
-
-#define ETH_RESET_PIN GET_PIN(C, 0)
-void phy_reset(void)
-{
-    rt_pin_mode(ETH_RESET_PIN, PIN_MODE_OUTPUT);
-    rt_pin_write(ETH_RESET_PIN, PIN_HIGH);
-    rt_thread_mdelay(100);
-    rt_pin_write(ETH_RESET_PIN, PIN_LOW);
-    rt_thread_mdelay(100);
-    rt_pin_write(ETH_RESET_PIN, PIN_HIGH);
-}
-
-
 RT_WEAK void rt_hw_board_init()
 {
     extern void hw_board_init(char *clock_src, int32_t clock_src_freq, int32_t clock_target_freq);
