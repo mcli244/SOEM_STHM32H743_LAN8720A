@@ -432,13 +432,13 @@ void MPU_Config(void)
 
 void rt_hw_stm32_eth_init(void)
 {
-    MPU_Config();
+    // MPU_Config();
 
-    /* Enable I-Cache---------------------------------------------------------*/
-    SCB_EnableICache();
+    // /* Enable I-Cache---------------------------------------------------------*/
+    // SCB_EnableICache();
 
-    /* Enable D-Cache---------------------------------------------------------*/
-    SCB_EnableDCache();
+    // /* Enable D-Cache---------------------------------------------------------*/
+    // SCB_EnableDCache();
 
     ETH_RESET_GPIO_INIT();
     ETH_RESET();
