@@ -83,6 +83,7 @@
 
 int LAN8742_Init(void);
 int LAN8742_GetLinkState(void);
+void rt_hw_ms_delay(int nms);
 
 
 #endif

@@ -208,14 +208,10 @@ void PHY_Init(void)
     int cnt = 0;
 
     ETH_MACConfigTypeDef MACConf;
-
-    
     ETH_MACFilterConfigTypeDef filterDef;
-    
     HAL_ETH_GetMACFilterConfig(&heth,&filterDef);
     filterDef.PromiscuousMode = ENABLE;
     HAL_ETH_SetMACFilterConfig(&heth,&filterDef);
-    
     
     for(idx = 0; idx < ETH_RX_DESC_CNT; idx ++)
     {
@@ -223,22 +219,17 @@ void PHY_Init(void)
     }
     
     LAN8742_Init();
-    
     do
     {
-        HAL_Delay(100);
+        rt_hw_ms_delay(100);
         PHYLinkState = LAN8742_GetLinkState();
         cnt ++;
-        if(cnt >= 3)
-        {
+        if(cnt >= 30) {
             cnt = 0;
-            // LAN8742_Init();
             rt_kprintf("LAN8740_GetLinkState = %d Link failed\r\n",PHYLinkState);
-            break;
+            return;
         }
-        // rt_kprintf("LAN8740_GetLinkState = %d \r\n",PHYLinkState);
     }while(PHYLinkState <= LAN8742_STATUS_LINK_DOWN);
-    
     
     switch (PHYLinkState)
     {
@@ -396,10 +387,11 @@ void ETH_RESET_GPIO_INIT(void)
 
 void ETH_RESET(void)
 {
-    HAL_GPIO_WritePin(LAN_nRST_GPIO_Port, LAN_nRST_Pin, GPIO_PIN_RESET);
-    HAL_Delay(10);
     HAL_GPIO_WritePin(LAN_nRST_GPIO_Port, LAN_nRST_Pin, GPIO_PIN_SET);
-    HAL_Delay(10);
+    rt_hw_ms_delay(10);
+    HAL_GPIO_WritePin(LAN_nRST_GPIO_Port, LAN_nRST_Pin, GPIO_PIN_RESET);
+    rt_hw_ms_delay(10);
+    HAL_GPIO_WritePin(LAN_nRST_GPIO_Port, LAN_nRST_Pin, GPIO_PIN_SET);
 }
 
 
