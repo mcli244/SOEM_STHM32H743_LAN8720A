@@ -19,7 +19,7 @@
 // #define DM9000_DEBUG
 
 #ifdef DM9000_DEBUG
-#define DM9000_DUG printf
+#define DM9000_DUG rt_kprintf
 #else
 #define DM9000_DUG(...) \
     do                  \
@@ -200,14 +200,10 @@ void DM9000_FMC_Config(void)
     }
 
     /* USER CODE BEGIN FMC_Init 2 */
-    // 设置引脚为输入模式（下降沿触发）
-    //   rt_pin_mode(PIN_IRQ, PIN_MODE_INPUT);
-
-    //   // 设置引脚中断触发模式
-    //   rt_pin_attach_irq(PIN_IRQ, PIN_IRQ_MODE_FALLING, irq_callback, RT_NULL);
-
-    //   // 使能中断
-    //   rt_pin_irq_enable(PIN_IRQ, PIN_IRQ_ENABLE);
+    //设置引脚为输入模式（下降沿触发）
+    rt_pin_mode(PIN_IRQ, PIN_MODE_INPUT);
+    rt_pin_attach_irq(PIN_IRQ, PIN_IRQ_MODE_FALLING, irq_callback, RT_NULL);
+    rt_pin_irq_enable(PIN_IRQ, PIN_IRQ_ENABLE);
     /* USER CODE END FMC_Init 2 */
 }
 
@@ -444,7 +440,7 @@ int DM9000_Init(void)
     }
     else
         rt_kprintf("DM9000 Establish Link Failed!\r\n");
-    // DM9000_WriteReg(DM9000_IMR,dm9000_net_dev.imr_all);  //设置中断
+    DM9000_WriteReg(DM9000_IMR,dm9000_net_dev.imr_all);  //设置中断
     return 0;
 }
 
@@ -511,6 +507,7 @@ struct pbuf *DM9000_Receive_Packet(void)
 
     p = NULL;
 
+    DM9000_DUG("DM9000_Receive_Packet\r\n");
 __error_retry:
     DM9000_ReadReg(DM9000_MRCMDX); // 假读
     rxbyte = (u8)DM9000->DATA;     // 进行第二次读取
@@ -1015,27 +1012,27 @@ void dm9000_arp_test(int argc, char **argv)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00,        // 目标 MAC（未知）
         192, 168, 8, 1                           // 目标 IP
     };
-    // net_send(arp_packet, sizeof(arp_packet));
+    net_send(arp_packet, sizeof(arp_packet));
 
     
     uint8_t rx_buf[1540];
     int pkg_cnt = 0;
     int pkg_send_cnt = 0;
     int pkg_recv_cnt = 0;
+    int pkg_arp_cnt = 0;
     int time_out = 0;
     while(1)
     {
-        net_send(arp_packet, sizeof(arp_packet));
-        _dm9000_delay_ms(10);
         pkg_send_cnt++;
         int rx_cnt = DM9000_Receive_Packet2(rx_buf, sizeof(rx_buf));
         if(rx_cnt > 0)
         {
+            pkg_recv_cnt++;
             uint16_t ethertype = (rx_buf[12] << 8) | rx_buf[13];
-            // rt_kprintf("recv <<<--- total:%d ethertype:0x%x\n", rx_cnt, ethertype);
+            rt_kprintf("recv <<<--- total:%d ethertype:0x%x\n", rx_cnt, ethertype);
             if (ethertype == 0x0806)
             {
-                pkg_recv_cnt++;
+                pkg_arp_cnt++;
                 // rt_kprintf("recv <<<--- total:%d\n", rx_cnt);
                 // rt_kprintf(">>> 这是一帧 ARP 包 pkg_recv_cnt:%d time_out:%d\n", pkg_recv_cnt, time_out);
                 // hex_dump(rx_buf, rx_cnt);
@@ -1052,7 +1049,7 @@ void dm9000_arp_test(int argc, char **argv)
         time_out ++;
         if(time_out >= 10)
         {
-            rt_kprintf(">>> pkg_recv_cnt:%d pkg_send_cnt:%d\n", pkg_recv_cnt, pkg_send_cnt);
+            rt_kprintf(">>> pkg_recv_cnt:%d pkg_send_cnt:%d pkg_arp_cnt:%d\n", pkg_recv_cnt, pkg_send_cnt, pkg_arp_cnt);
             return;
         } 
     }

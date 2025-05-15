@@ -23,7 +23,7 @@ enum DM9000_PHY_mode
     DM9000_AUTO     =   8,                  //自动协商
 };
 
-//#define DM9000_USE_LWIP    // 将DM9000对接到LWIP
+#define DM9000_USE_LWIP    // 将DM9000对接到LWIP
 
 #define DM9000_RST      PDout(7)        //DM9000复位引脚
 #define DM9000_INT      PGin(6)         //DM9000中断引脚

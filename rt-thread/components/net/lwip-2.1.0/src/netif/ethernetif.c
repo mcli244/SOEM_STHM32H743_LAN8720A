@@ -702,7 +702,7 @@ static void eth_rx_thread_entry(void* parameter)
                 }
                 else break;
 
-                device->rebulid_rx_desc();
+                // device->rebulid_rx_desc();
             }
         }
         else
