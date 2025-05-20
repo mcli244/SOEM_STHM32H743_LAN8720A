@@ -22,6 +22,7 @@
 #include "ecatuser.h"
 /* USER CODE BEGIN 0 */
 #include "drv_common.h"
+#include "tim.h"
 /* USER CODE END 0 */
 
 TIM_HandleTypeDef htim2;
@@ -31,6 +32,7 @@ TIM_HandleTypeDef htim4;
 void TIM4_IRQHandler(void)
 {
   __HAL_TIM_CLEAR_IT(&htim4, TIM_IT_UPDATE);
+  app_time_base += SYNC0TIME*1000;
   ecat_loop();
 }
 

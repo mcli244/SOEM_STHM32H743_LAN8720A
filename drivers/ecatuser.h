@@ -8,6 +8,11 @@
 #define SYNC0TIME 1000 
 ///1000us
 
+extern uint64 app_time_base;
+extern uint64 ref_time_base;
+extern uint64 sync_start_time;
+extern int64 app_time_offset;
+
 #if 0
 typedef struct __packed 
 {
