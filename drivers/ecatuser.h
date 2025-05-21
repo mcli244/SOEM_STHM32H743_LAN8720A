@@ -35,9 +35,11 @@ typedef struct __packed
    int32_t TouchProbe1RisingEdgePos;   // 探针1上升沿位置反馈
    int16_t ServoError;
 } PDO_Input;
-#endif
+
 
 void ecat_init(void);
 void ecat_loop(void);
 void ctrl_state(void);
+
+#endif
 

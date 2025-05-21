@@ -338,8 +338,9 @@ void ecat_loop(void)
     case 4: // 正常控制阶段（位置模式）
       for (int i = 1; i <= ec_slavecount; i++)
       {
-        // outputs[i]->ControlWord = 0x1F;  // 带立即更新位
+        rt_base_t level = rt_hw_interrupt_disable();  
         outputs[i]->TargetPos += step_increment;
+        rt_hw_interrupt_enable(level);                 
       }
 
       if (stop_flag)
