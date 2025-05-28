@@ -37,6 +37,7 @@ struct dm9000_net_eth
     u16 queue_packet_len;      // 每个数据包大小
     u8 mac_addr[6];            // MAC地址
     u8 multicase_addr[8];      // 组播地址
+    rt_timer_t poll_link_timer;
 };
 static struct dm9000_net_eth dm9000_net_dev =
     {
@@ -433,13 +434,13 @@ int DM9000_Init(void)
     DM9000_WriteReg(DM9000_RCR, 0x1F); // 启用所有接收模式，包括广播、接收长度较小的数据包等
 
     DM9000_WriteReg(DM9000_IMR, IMR_PAR);
-    temp = DM9000_Get_SpeedAndDuplex(); // 获取DM9000的连接速度和双工状态
-    if (temp != 0XFF)                   // 连接成功，通过串口显示连接速度和双工状态
-    {
-        DM9000_DUG("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
-    }
-    else
-        rt_kprintf("DM9000 Establish Link Failed!\r\n");
+    // temp = DM9000_Get_SpeedAndDuplex(); // 获取DM9000的连接速度和双工状态
+    // if (temp != 0XFF)                   // 连接成功，通过串口显示连接速度和双工状态
+    // {
+    //     DM9000_DUG("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
+    // }
+    // else
+    //     rt_kprintf("DM9000 Establish Link Failed!\r\n");
     DM9000_WriteReg(DM9000_IMR,dm9000_net_dev.imr_all);  //设置中断
     return 0;
 }
@@ -735,7 +736,7 @@ static rt_err_t dm9000_eth_init(rt_device_t dev)
     if (0 != DM9000_Init())
         return RT_ERROR;
 
-    eth_device_linkchange(&dm9000_net_dev.parent, RT_TRUE);
+    // eth_device_linkchange(&dm9000_net_dev.parent, RT_TRUE);
     return RT_EOK;
 }
 
@@ -790,6 +791,61 @@ static rt_err_t dm9000_eth_control(rt_device_t dev, int cmd, void *args)
     }
 }
 
+static void phy_linkchange()
+{
+    static rt_uint8_t phy_speed = 0;
+    rt_uint8_t phy_speed_new = 0;
+    rt_uint32_t status;
+    u8 temp;
+
+    temp = DM9000_Get_SpeedAndDuplex(); // 获取DM9000的连接速度和双工状态
+    if (temp != 0XFF)                   // 连接成功，通过串口显示连接速度和双工状态
+    {
+        if(phy_speed != temp) // 如果连接状态发生变化
+        {
+            phy_speed_new = temp;
+            phy_speed = temp;
+            DM9000_DUG("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
+            eth_device_linkchange(&dm9000_net_dev.parent, RT_TRUE);
+        }
+        else
+        {
+            return; // 没有变化，直接返回
+        }
+    }
+    else
+    {
+        DM9000_DUG("link down");
+        phy_speed = 0;
+        eth_device_linkchange(&dm9000_net_dev.parent, RT_FALSE);
+    }
+}
+
+
+static void phy_monitor_thread_entry(void *parameter)
+{
+    phy_linkchange();
+#ifdef PHY_USING_INTERRUPT_MODE
+    /* configuration intterrupt pin */
+    rt_pin_mode(PHY_INT_PIN, PIN_MODE_INPUT_PULLUP);
+    rt_pin_attach_irq(PHY_INT_PIN, PIN_IRQ_MODE_FALLING, eth_phy_isr, (void *)"callbackargs");
+    rt_pin_irq_enable(PHY_INT_PIN, PIN_IRQ_ENABLE);
+
+    /* enable phy interrupt */
+    HAL_ETH_WritePHYRegister(&EthHandle, PHY_ADDR, PHY_INTERRUPT_MASK_REG, PHY_INT_MASK);
+#if defined(PHY_INTERRUPT_CTRL_REG)
+    HAL_ETH_WritePHYRegister(&EthHandle, PHY_ADDR, PHY_INTERRUPT_CTRL_REG, PHY_INTERRUPT_EN);
+#endif
+#else /* PHY_USING_INTERRUPT_MODE */
+    dm9000_net_dev.poll_link_timer = rt_timer_create("phylnk", (void (*)(void*))phy_linkchange,
+                                        NULL, RT_TICK_PER_SECOND, RT_TIMER_FLAG_PERIODIC);
+    if (!dm9000_net_dev.poll_link_timer || rt_timer_start(dm9000_net_dev.poll_link_timer) != RT_EOK)
+    {
+        LOG_E("Start link change detection timer failed");
+    }
+#endif /* PHY_USING_INTERRUPT_MODE */
+}
+
 /** 注册网卡 */
 static int rt_hw_dm9000_netdev_init(void)
 {
@@ -814,7 +870,26 @@ static int rt_hw_dm9000_netdev_init(void)
     dm9000_net_dev.parent.parent.user_data = RT_NULL;
 
     eth_device_init(&dm9000_net_dev.parent, DM900NET_NAME);
-    return 0;
+
+    /* start phy monitor */
+    rt_thread_t tid;
+    rt_uint32_t state;
+    tid = rt_thread_create("phy",
+                           phy_monitor_thread_entry,
+                           RT_NULL,
+                           1024,
+                           RT_THREAD_PRIORITY_MAX - 2,
+                           2);
+    if (tid != RT_NULL)
+    {
+        rt_thread_startup(tid);
+    }
+    else
+    {
+        state = -RT_ERROR;
+    }
+
+    return state;
 }
 #endif
 
