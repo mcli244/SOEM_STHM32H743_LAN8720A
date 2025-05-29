@@ -39,6 +39,9 @@ int32 cur_pos = 0;
 uint16 csp_pos_delay;
 int cmdpos_raw;
 
+static motor_pos_t cur_motor_info = {0, 0, 0, 0, 0};
+static uint8_t cur_motor_info_update = 0;
+
 #define DEBUG 1
 
 static void _dm9000_delay_ms(uint16_t nms)
@@ -336,13 +339,24 @@ void ecat_loop(void)
       break;
 
     case 4: // 正常控制阶段（位置模式）
-      for (int i = 1; i <= ec_slavecount; i++)
+      // for (int i = 1; i <= ec_slavecount; i++)
+      // {
+      //   rt_base_t level = rt_hw_interrupt_disable();  
+      //   outputs[i]->TargetPos += step_increment;
+      //   rt_hw_interrupt_enable(level);                 
+      // }
+      if(cur_motor_info_update)
       {
         rt_base_t level = rt_hw_interrupt_disable();  
-        outputs[i]->TargetPos += step_increment;
-        rt_hw_interrupt_enable(level);                 
+        outputs[1]->TargetPos = cur_motor_info.x;
+        outputs[2]->TargetPos = cur_motor_info.y;
+        outputs[3]->TargetPos = cur_motor_info.z;
+        outputs[4]->TargetPos = cur_motor_info.a;
+        outputs[5]->TargetPos = cur_motor_info.b;
+        rt_hw_interrupt_enable(level);    
+        cur_motor_info_update = 0;
       }
-
+                   
       if (stop_flag)
       {
         startup_step = 5;
@@ -525,3 +539,119 @@ void ecat_set_pos(int argc, char **argv)
   rt_kprintf("ecat_set_pos step_increment:%d\r\n", step_increment);
 }
 MSH_CMD_EXPORT(ecat_set_pos, "ecat_set_pos");
+
+
+#define ECAT_MOTOR_STEP_MAX (81920)
+int motor_set(motor_pos_t *m_info)
+{
+  if(m_info == NULL)
+  {
+    rt_kprintf("ecat_motor_ctrl: m_info is NULL\r\n");
+    return -1;
+  }
+
+  if (dorun == 0)
+  {
+    rt_kprintf("ecat not running\r\n");
+    return -1;
+  }
+
+  if (startup_step != 4)
+  {
+    rt_kprintf("ecat not in operation enabled state\r\n");
+    return -1;
+  }
+
+  if (abs(m_info->x) > ECAT_MOTOR_STEP_MAX  ||
+      abs(m_info->y) > ECAT_MOTOR_STEP_MAX  ||
+      abs(m_info->z) > ECAT_MOTOR_STEP_MAX  ||
+      abs(m_info->a) > ECAT_MOTOR_STEP_MAX  ||
+      abs(m_info->b) > ECAT_MOTOR_STEP_MAX )
+  {
+    rt_kprintf("ecat_motor_ctrl: position out of range ECAT_MOTOR_STEP_MAX:%d\r\n", ECAT_MOTOR_STEP_MAX);
+    rt_kprintf("ecat_motor_ctrl: x:%d y:%d z:%d a:%d b:%d\r\n",
+             m_info->x, m_info->y, m_info->z,
+             m_info->a, m_info->b);
+    return -1;
+  }
+
+  cur_motor_info.x += m_info->x;
+  cur_motor_info.y += m_info->y;
+  cur_motor_info.z += m_info->z;
+  cur_motor_info.a += m_info->a;
+  cur_motor_info.b += m_info->b;
+  
+  cur_motor_info_update = 1;
+
+}
+
+int motor_get(motor_pos_t *m_info)
+{
+  if(m_info == NULL)
+  {
+    rt_kprintf("ecat_get_motor_info: m_info is NULL\r\n");
+    return -1;
+  }
+
+  if (dorun == 0)
+  {
+    rt_kprintf("ecat not running\r\n");
+    return -1;
+  }
+
+  if (startup_step != 4)
+  {
+    rt_kprintf("ecat not in operation enabled state\r\n");
+    return -1;
+  } 
+
+  m_info->x = inputs[1]->CurrentPosition;
+  m_info->y = inputs[2]->CurrentPosition;
+  m_info->z = inputs[3]->CurrentPosition;
+  m_info->a = inputs[4]->CurrentPosition;
+  m_info->b = inputs[5]->CurrentPosition;
+
+  return 0;
+}
+
+void ecat_motor_ctrl_test(int argc, char **argv)
+{
+  motor_pos_t m_info = {0, 0, 0, 0, 0};
+  m_info.x = atoi(argv[1]);
+  m_info.y = atoi(argv[2]);
+  m_info.z = atoi(argv[3]);
+  m_info.a = atoi(argv[4]);
+  m_info.b = atoi(argv[5]);
+  rt_kprintf("ecat_motor_ctrl_test x:%d y:%d z:%d a:%d b:%d\r\n",
+             m_info.x, m_info.y, m_info.z,
+             m_info.a, m_info.b);
+  int ret = motor_set(&m_info);
+  if (ret < 0)
+  {
+    rt_kprintf("ecat_motor_ctrl failed: %d\r\n", ret);
+  }
+  else
+  {
+    rt_kprintf("ecat_motor_ctrl success\r\n");
+  }
+}
+MSH_CMD_EXPORT(ecat_motor_ctrl_test, "ecat_motor_ctrl_test");
+
+
+void ecat_get_motor_info_test(int argc, char **argv)
+{
+  motor_pos_t m_info = {0, 0, 0, 0, 0};
+  int ret = motor_get(&m_info);
+  if (ret < 0)
+  {
+    rt_kprintf("ecat_motor_ctrl failed: %d\r\n", ret);
+  }
+  else
+  {
+    rt_kprintf("ecat_motor_ctrl success\r\n");
+    rt_kprintf("Motor Info - x:%d y:%d z:%d a:%d b:%d\r\n",
+               m_info.x, m_info.y, m_info.z,
+               m_info.a, m_info.b);
+  }
+}
+MSH_CMD_EXPORT(ecat_get_motor_info_test, "ecat_get_motor_info_test");

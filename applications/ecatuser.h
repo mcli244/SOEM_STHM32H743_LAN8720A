@@ -41,5 +41,29 @@ void ecat_init(void);
 void ecat_loop(void);
 void ctrl_state(void);
 
+
+typedef struct  
+{
+   int32_t x;
+   int32_t y;
+   int32_t z;
+   int32_t a;
+   int32_t b;
+} motor_pos_t;
+
+/** Motor control function.
+ *
+ * @param[in] pos = 增量式位置控制， 在当前位置基础上增加或减少位置
+ * @return 0 on success, negative value on failure.
+ */ 
+int motor_set(motor_pos_t *pos);
+
+/** Motor control function.
+ *
+ * @param[out] pos = 电机当前位置信息
+ * @return 0 on success, negative value on failure.
+ */ 
+int motor_get(motor_pos_t *pos);
+
 #endif
 
