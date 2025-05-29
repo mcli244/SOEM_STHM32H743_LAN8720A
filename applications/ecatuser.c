@@ -12,6 +12,9 @@
 #include "osal.h"
 #include "ecatuser.h"
 #include "tim.h"
+#include "motor.h"
+
+#define ECAT_MOTOR_STEP_MAX (81920)
 
 uint64 app_time_base = 0;
 uint64 ref_time_base = 0;
@@ -23,26 +26,18 @@ int32_t step_increment = 10;
 int32_t stop_flag = 0;
 
 // 注意：为了和SOEM内部一致，这里索引号为0的实际上没有被使用
-PDO_Output *outputs[5];
-PDO_Input *inputs[5];
+#define MOTOR_CNT 6
+PDO_Output *outputs[MOTOR_CNT];
+PDO_Input *inputs[MOTOR_CNT];
 
 char IOmap[200];
 uint32_t dorun = 0;
-uint32_t OpenReady = 0;
-
 int oloop, iloop;
 
 // motor control
-uint16 cur_status;
 uint8_t startup_step = 0;
-int32 cur_pos = 0;
-uint16 csp_pos_delay;
-int cmdpos_raw;
-
 static motor_pos_t cur_motor_info = {0, 0, 0, 0, 0};
 static uint8_t cur_motor_info_update = 0;
-
-#define DEBUG 1
 
 static void _dm9000_delay_ms(uint16_t nms)
 {
@@ -190,13 +185,13 @@ void ecat_init(void)
                    ec_slave[cnt].state, (int)ec_slave[cnt].pdelay, ec_slave[cnt].hasdc);
       }
 
-      oloop = ec_slave[0].Obytes; //???????????????????????SSC-IO??2
+      oloop = ec_slave[0].Obytes; 
       if ((oloop == 0) && (ec_slave[0].Obits > 0))
         oloop = 1;
       if (oloop > 30)
         oloop = 30;
 
-      iloop = ec_slave[0].Ibytes; //???????????????????????SSC-IO??6
+      iloop = ec_slave[0].Ibytes;
       if ((iloop == 0) && (ec_slave[0].Ibits > 0))
         iloop = 1;
       if (iloop > 30)
@@ -229,7 +224,8 @@ void ecat_init(void)
 
       if (ec_slave[0].state == EC_STATE_OPERATIONAL)
       {
-        for (slc = 1; slc <= ec_slavecount; slc++)
+        // for (slc = 1; slc <= ec_slavecount; slc++)
+        for (slc = 1; slc < MOTOR_CNT; slc++)
         {
           outputs[slc] = (PDO_Output *)ec_slave[slc].outputs;
           inputs[slc] = (PDO_Input *)ec_slave[slc].inputs;
@@ -304,6 +300,12 @@ void ecat_loop(void)
         outputs[i]->TargetPos = inputs[i]->CurrentPosition; // 初始对齐
       }
 
+      cur_motor_info.x = inputs[1]->CurrentPosition;
+      cur_motor_info.y = inputs[2]->CurrentPosition;
+      cur_motor_info.z = inputs[3]->CurrentPosition;
+      cur_motor_info.a = inputs[4]->CurrentPosition;
+      cur_motor_info.b = inputs[5]->CurrentPosition;
+
       for (int i = 1; i <= ec_slavecount; i++)
       {
         uint16_t status = inputs[i]->StatusWord;
@@ -341,22 +343,22 @@ void ecat_loop(void)
     case 4: // 正常控制阶段（位置模式）
       // for (int i = 1; i <= ec_slavecount; i++)
       // {
-      //   rt_base_t level = rt_hw_interrupt_disable();  
+      //   rt_base_t level = rt_hw_interrupt_disable();
       //   outputs[i]->TargetPos += step_increment;
-      //   rt_hw_interrupt_enable(level);                 
+      //   rt_hw_interrupt_enable(level);
       // }
-      if(cur_motor_info_update)
+      if (cur_motor_info_update)
       {
-        rt_base_t level = rt_hw_interrupt_disable();  
+        // rt_base_t level = rt_hw_interrupt_disable();
         outputs[1]->TargetPos = cur_motor_info.x;
         outputs[2]->TargetPos = cur_motor_info.y;
         outputs[3]->TargetPos = cur_motor_info.z;
         outputs[4]->TargetPos = cur_motor_info.a;
         outputs[5]->TargetPos = cur_motor_info.b;
-        rt_hw_interrupt_enable(level);    
+        // rt_hw_interrupt_enable(level);
         cur_motor_info_update = 0;
       }
-                   
+
       if (stop_flag)
       {
         startup_step = 5;
@@ -468,57 +470,30 @@ int ecat_status(void)
   rt_kprintf("dorun:%d\r\n", dorun);
   rt_kprintf("startup_step:%d\r\n", startup_step);
   rt_kprintf("stop_flag:%d\r\n", stop_flag);
-  return 0;
-}
-MSH_CMD_EXPORT(ecat_status, "ecat_status");
+  rt_kprintf("ec_slavecount:%d\r\n", ec_slavecount);
+  rt_kprintf("cur_motor_info x:%08d y:%08d z:%08d a:%08d b:%08d\r\n", 
+    cur_motor_info.x, cur_motor_info.y, cur_motor_info.z, cur_motor_info.a, cur_motor_info.b);
 
-extern uint32_t dorun;
-int show_flag = 0;
-int _do_ecat_show_rdo(void)
-{
-  show_flag = 1;
-  while (1)
+  if (dorun > 0)
   {
-    if (dorun > 0)
+    for(int i=1; i<=ec_slavecount; i++)
     {
-      //			rt_kprintf("state:%d; StatusWord:%x, CurrentPosition:%ld,TargetMode:%d CurrentTorque:%d CurrentSpeed:%d ServoError:%d\r\n",
-      //			ec_slave[1].state, inputs1->StatusWord, inputs1->CurrentPosition,inputs1->TargetMode,
-      //			inputs1->CurrentTorque, inputs1->CurrentSpeed, inputs1->ServoError);
+      rt_kprintf("state:%d; StatusWord:%x, CurrentPosition:%8ld,TargetMode:%d CurrentTorque:%8d CurrentSpeed:%8d ServoError:%d\r\n",
+               ec_slave[i].state, inputs[i]->StatusWord, inputs[i]->CurrentPosition, inputs[i]->TargetMode,
+               inputs[i]->CurrentTorque, inputs[i]->CurrentSpeed, inputs[i]->ServoError);
     }
-    if (show_flag == 0)
-      break;
-    _dm9000_delay_ms(1);
-  }
-
-  return RT_EOK;
-}
-int ecat_show_rdo(void)
-{
-  rt_thread_t tid;
-  tid = rt_thread_create("ecat_show_rdo",
-                         _do_ecat_show_rdo,
-                         RT_NULL,
-                         1024 * 1,
-                         5,
-                         2);
-  if (tid != RT_NULL)
-  {
-    rt_thread_startup(tid);
+    
   }
   else
   {
-    rt_kprintf("state = -RT_ERROR\n");
+    rt_kprintf("ecat not running\r\n");
+    return -1;
   }
   return 0;
-}
-MSH_CMD_EXPORT(ecat_show_rdo, "ecat_show_rdo");
 
-int ecat_show_stop(void)
-{
-  show_flag = 0;
   return 0;
 }
-MSH_CMD_EXPORT(ecat_show_stop, "ecat_show_stop");
+MSH_CMD_EXPORT(ecat_status, "ecat_status");
 
 void ecat_set_pos(int argc, char **argv)
 {
@@ -540,13 +515,12 @@ void ecat_set_pos(int argc, char **argv)
 }
 MSH_CMD_EXPORT(ecat_set_pos, "ecat_set_pos");
 
-
-#define ECAT_MOTOR_STEP_MAX (81920)
-int motor_set(motor_pos_t *m_info)
+//////////////////////////////// 电机控制对外接口 //////////////////////////////////////////////////////////// 
+int motor_set(motor_pos_t *pos)
 {
-  if(m_info == NULL)
+  if (pos == NULL)
   {
-    rt_kprintf("ecat_motor_ctrl: m_info is NULL\r\n");
+    rt_kprintf("ecat_motor_ctrl: pos is NULL\r\n");
     return -1;
   }
 
@@ -562,67 +536,75 @@ int motor_set(motor_pos_t *m_info)
     return -1;
   }
 
-  if (abs(m_info->x) > ECAT_MOTOR_STEP_MAX  ||
-      abs(m_info->y) > ECAT_MOTOR_STEP_MAX  ||
-      abs(m_info->z) > ECAT_MOTOR_STEP_MAX  ||
-      abs(m_info->a) > ECAT_MOTOR_STEP_MAX  ||
-      abs(m_info->b) > ECAT_MOTOR_STEP_MAX )
+  if (abs(pos->x) > ECAT_MOTOR_STEP_MAX ||
+      abs(pos->y) > ECAT_MOTOR_STEP_MAX ||
+      abs(pos->z) > ECAT_MOTOR_STEP_MAX ||
+      abs(pos->a) > ECAT_MOTOR_STEP_MAX ||
+      abs(pos->b) > ECAT_MOTOR_STEP_MAX)
   {
     rt_kprintf("ecat_motor_ctrl: position out of range ECAT_MOTOR_STEP_MAX:%d\r\n", ECAT_MOTOR_STEP_MAX);
     rt_kprintf("ecat_motor_ctrl: x:%d y:%d z:%d a:%d b:%d\r\n",
-             m_info->x, m_info->y, m_info->z,
-             m_info->a, m_info->b);
+               pos->x, pos->y, pos->z,
+               pos->a, pos->b);
     return -1;
   }
 
-  cur_motor_info.x += m_info->x;
-  cur_motor_info.y += m_info->y;
-  cur_motor_info.z += m_info->z;
-  cur_motor_info.a += m_info->a;
-  cur_motor_info.b += m_info->b;
-  
+  cur_motor_info.x += pos->x;
+  cur_motor_info.y += pos->y;
+  cur_motor_info.z += pos->z;
+  cur_motor_info.a += pos->a;
+  cur_motor_info.b += pos->b;
   cur_motor_info_update = 1;
-
-}
-
-int motor_get(motor_pos_t *m_info)
-{
-  if(m_info == NULL)
-  {
-    rt_kprintf("ecat_get_motor_info: m_info is NULL\r\n");
-    return -1;
-  }
-
-  if (dorun == 0)
-  {
-    rt_kprintf("ecat not running\r\n");
-    return -1;
-  }
-
-  if (startup_step != 4)
-  {
-    rt_kprintf("ecat not in operation enabled state\r\n");
-    return -1;
-  } 
-
-  m_info->x = inputs[1]->CurrentPosition;
-  m_info->y = inputs[2]->CurrentPosition;
-  m_info->z = inputs[3]->CurrentPosition;
-  m_info->a = inputs[4]->CurrentPosition;
-  m_info->b = inputs[5]->CurrentPosition;
 
   return 0;
 }
 
-void ecat_motor_ctrl_test(int argc, char **argv)
+int motor_get(motor_pos_t *pos)
 {
+  if (pos == NULL)
+  {
+    rt_kprintf("ecat_get_motor_info: pos is NULL\r\n");
+    return -1;
+  }
+
+  if (dorun == 0)
+  {
+    rt_kprintf("ecat not running\r\n");
+    return -1;
+  }
+
+  if (startup_step != 4)
+  {
+    rt_kprintf("ecat not in operation enabled state\r\n");
+    return -1;
+  }
+
+  pos->x = inputs[1]->CurrentPosition;
+  pos->y = inputs[2]->CurrentPosition;
+  pos->z = inputs[3]->CurrentPosition;
+  pos->a = inputs[4]->CurrentPosition;
+  pos->b = inputs[5]->CurrentPosition;
+
+  return 0;
+}
+
+void ecat_motor_set(int argc, char **argv)
+{
+
+  if(argc != 6)
+  {
+    rt_kprintf("Usage: ecat_motor_set x y z a b\r\n");
+    rt_kprintf("rg: ecat_motor_set 100 200 300 400 500\r\n");
+    return;
+  }
+
   motor_pos_t m_info = {0, 0, 0, 0, 0};
   m_info.x = atoi(argv[1]);
   m_info.y = atoi(argv[2]);
   m_info.z = atoi(argv[3]);
   m_info.a = atoi(argv[4]);
   m_info.b = atoi(argv[5]);
-  rt_kprintf("ecat_motor_ctrl_test x:%d y:%d z:%d a:%d b:%d\r\n",
+  rt_kprintf("ecat_motor_set x:%d y:%d z:%d a:%d b:%d\r\n",
              m_info.x, m_info.y, m_info.z,
              m_info.a, m_info.b);
   int ret = motor_set(&m_info);
@@ -635,23 +617,43 @@ void ecat_motor_ctrl_test(int argc, char **argv)
     rt_kprintf("ecat_motor_ctrl success\r\n");
   }
 }
-MSH_CMD_EXPORT(ecat_motor_ctrl_test, "ecat_motor_ctrl_test");
+MSH_CMD_EXPORT(ecat_motor_set, "ecat_motor_set");
 
-
-void ecat_get_motor_info_test(int argc, char **argv)
+void ecat_motor_get(int argc, char **argv)
 {
   motor_pos_t m_info = {0, 0, 0, 0, 0};
   int ret = motor_get(&m_info);
   if (ret < 0)
   {
-    rt_kprintf("ecat_motor_ctrl failed: %d\r\n", ret);
+    rt_kprintf("ecat_motor_get failed: %d\r\n", ret);
   }
   else
   {
-    rt_kprintf("ecat_motor_ctrl success\r\n");
+    rt_kprintf("ecat_motor_get success\r\n");
     rt_kprintf("Motor Info - x:%d y:%d z:%d a:%d b:%d\r\n",
                m_info.x, m_info.y, m_info.z,
                m_info.a, m_info.b);
   }
 }
-MSH_CMD_EXPORT(ecat_get_motor_info_test, "ecat_get_motor_info_test");
+MSH_CMD_EXPORT(ecat_motor_get, "ecat_motor_get");
+
+int motor_init(void)
+{
+  rt_thread_t th = rt_thread_find("myth");
+  if (th != RT_NULL)
+  {
+    rt_kprintf("motor_init: thread already exists\r\n");
+    return -1;
+  }
+
+  ecat_start();
+
+  return RT_EOK;
+}
+MSH_CMD_EXPORT(motor_init, "motor_init");
+
+int motor_deinit(void)
+{
+  return RT_EOK;
+}
+MSH_CMD_EXPORT(motor_deinit, "motor_deinit");
