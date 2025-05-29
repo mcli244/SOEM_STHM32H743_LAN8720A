@@ -429,9 +429,9 @@ int DM9000_Init(void)
     // 设置MAC地址和组播地址
     DM9000_Set_MACAddress(dm9000_net_dev.mac_addr);      // 设置MAC地址
     DM9000_Set_Multicast(dm9000_net_dev.multicase_addr); // 设置组播地址
-    // DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN);
+    DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN);
     // DM9000_WriteReg(DM9000_RCR, 0x3B);  // 开启 promiscuous 接收所有包
-    DM9000_WriteReg(DM9000_RCR, 0x1F); // 启用所有接收模式，包括广播、接收长度较小的数据包等
+    // DM9000_WriteReg(DM9000_RCR, 0x1F); // 启用所有接收模式，包括广播、接收长度较小的数据包等
 
     DM9000_WriteReg(DM9000_IMR, IMR_PAR);
     // temp = DM9000_Get_SpeedAndDuplex(); // 获取DM9000的连接速度和双工状态
@@ -676,8 +676,8 @@ void DM9000_ISRHandler(void)
 #ifdef DM9000_USE_LWIP
         rt_err_t result;
         result = eth_device_ready(&(dm9000_net_dev.parent));
-        if (result != RT_EOK)
-            rt_kprintf("RxCpltCallback err = %d", result);
+//        if (result != RT_EOK)
+            // rt_kprintf("RxCpltCallback err = %d", result);
 #else
 
         // **进入临界区，屏蔽所有中断**

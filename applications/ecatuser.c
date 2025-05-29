@@ -588,13 +588,13 @@ int motor_get(motor_pos_t *pos)
   return 0;
 }
 
-void ecat_motor_set(int argc, char **argv)
+void motor_set_test(int argc, char **argv)
 {
 
   if(argc != 6)
   {
-    rt_kprintf("Usage: ecat_motor_set x y z a b\r\n");
-    rt_kprintf("rg: ecat_motor_set 100 200 300 400 500\r\n");
+    rt_kprintf("Usage: motor_set_test x y z a b\r\n");
+    rt_kprintf("rg: motor_set_test 100 200 300 400 500\r\n");
     return;
   }
 
@@ -604,7 +604,7 @@ void ecat_motor_set(int argc, char **argv)
   m_info.z = atoi(argv[3]);
   m_info.a = atoi(argv[4]);
   m_info.b = atoi(argv[5]);
-  rt_kprintf("ecat_motor_set x:%d y:%d z:%d a:%d b:%d\r\n",
+  rt_kprintf("motor_set_test x:%d y:%d z:%d a:%d b:%d\r\n",
              m_info.x, m_info.y, m_info.z,
              m_info.a, m_info.b);
   int ret = motor_set(&m_info);
@@ -617,25 +617,25 @@ void ecat_motor_set(int argc, char **argv)
     rt_kprintf("ecat_motor_ctrl success\r\n");
   }
 }
-MSH_CMD_EXPORT(ecat_motor_set, "ecat_motor_set");
+MSH_CMD_EXPORT(motor_set_test, "motor_set_test");
 
-void ecat_motor_get(int argc, char **argv)
+void motor_get_test(int argc, char **argv)
 {
   motor_pos_t m_info = {0, 0, 0, 0, 0};
   int ret = motor_get(&m_info);
   if (ret < 0)
   {
-    rt_kprintf("ecat_motor_get failed: %d\r\n", ret);
+    rt_kprintf("motor_get_test failed: %d\r\n", ret);
   }
   else
   {
-    rt_kprintf("ecat_motor_get success\r\n");
+    rt_kprintf("motor_get_test success\r\n");
     rt_kprintf("Motor Info - x:%d y:%d z:%d a:%d b:%d\r\n",
                m_info.x, m_info.y, m_info.z,
                m_info.a, m_info.b);
   }
 }
-MSH_CMD_EXPORT(ecat_motor_get, "ecat_motor_get");
+MSH_CMD_EXPORT(motor_get_test, "motor_get_test");
 
 int motor_init(void)
 {

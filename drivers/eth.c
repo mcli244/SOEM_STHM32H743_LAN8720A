@@ -430,7 +430,7 @@ void MPU_Config(void)
 
 }
 
-void rt_hw_stm32_eth_init(void)
+int rt_hw_stm32_eth_init(void)
 {
     // MPU_Config();
 
