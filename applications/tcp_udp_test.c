@@ -7,6 +7,7 @@
 #define TCP_SERVER_PORT 5000
 #define UDP_SERVER_PORT 6000
 #define BUF_SIZE (1500)
+static int cnt = 0;
 
 char *get_ip_addr(char *netif_name)
 {
@@ -30,7 +31,8 @@ char *get_ip_addr(char *netif_name)
     return ip_addr;
 }
 
-void tcp_server_test(void)
+
+void do_tcp_server_test(void)
 {
     int server_sock, client_sock;
     struct sockaddr_in server_addr, client_addr;
@@ -94,12 +96,40 @@ void tcp_server_test(void)
                 break; // Exit the loop if client sends "exit"
             }
         }
+        cnt++;
     }
     closesocket(client_sock);
     rt_free(buf);
 }
+
+int tcp_server_test(void)
+{
+  rt_thread_t tid;
+  tid = rt_thread_create("tcp_server_test",
+                         do_tcp_server_test,
+                         RT_NULL,
+                         1024 * 8,
+                         25,
+                         2);
+  if (tid != RT_NULL)
+  {
+    rt_thread_startup(tid);
+  }
+  else
+  {
+    rt_kprintf("state = -RT_ERROR\n");
+  }
+  return 0;
+}
 MSH_CMD_EXPORT(tcp_server_test, TCP server test);
 
+extern int dm_irq_cnt;
+int tcp_server_show(void)
+{
+    rt_kprintf("TCP server test running, received %d messages. dm_irq_cnt:%d\n", cnt, dm_irq_cnt);
+    return 0;
+}
+MSH_CMD_EXPORT(tcp_server_show, TCP server test);
 
 void udp_server_test(void)
 {

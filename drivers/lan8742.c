@@ -46,12 +46,12 @@ int LAN8742_Init(void)
         }
     }
     
-    rt_kprintf("lan8742addr = %d\r\n",addr);
+    // rt_kprintf("lan8742addr = %d\r\n",addr);
     if( lan8742addr > 31 )
         return -1;
     
     //软件复位一下
-    rt_kprintf("start soft reset\r\n");
+    // rt_kprintf("start soft reset\r\n");
     rtn = HAL_ETH_WritePHYRegister(&heth,lan8742addr,LAN8742_BCR,LAN8742_BCR_SOFT_RESET);
     if( rtn != HAL_OK )
     {
@@ -60,7 +60,7 @@ int LAN8742_Init(void)
     }
 
     //查询是否复位完成
-    rt_kprintf("check soft reset is finish or not\r\n");
+    // rt_kprintf("check soft reset is finish or not\r\n");
     do
     {
         rtn = HAL_ETH_ReadPHYRegister(&heth, lan8742addr, LAN8742_BCR, &regvalue);
@@ -77,7 +77,7 @@ int LAN8742_Init(void)
             return -1;
         }
     }while( regvalue & LAN8742_BCR_SOFT_RESET );
-    rt_kprintf("soft reset is finish\r\n");
+    // rt_kprintf("soft reset is finish\r\n");
     
     //HAL_NVIC_SetPriority(ETH_IRQn, 0x7, 0);
     //HAL_NVIC_EnableIRQ(ETH_IRQn);

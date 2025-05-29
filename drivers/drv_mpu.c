@@ -120,17 +120,31 @@ int mpu_init(void)
 //    HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
     /* 配置 FMC 扩展 IO 的 MPU 属性为 Device 或者 Strongly Ordered */
+    // MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
+    // MPU_InitStruct.BaseAddress      = 0x60000000;
+    // MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
+    // MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+    // MPU_InitStruct.IsBufferable     = MPU_ACCESS_BUFFERABLE;
+    // MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+    // MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+    // MPU_InitStruct.Number           = MPU_REGION_NUMBER3;
+    // MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;
+    // MPU_InitStruct.SubRegionDisable = 0x00;
+    // MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+
+
     MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
-    MPU_InitStruct.BaseAddress      = 0x60000000;
+    MPU_InitStruct.BaseAddress      = 0x60000000;  // 根据你挂载的地址修改
     MPU_InitStruct.Size             = ARM_MPU_REGION_SIZE_64KB;
     MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-    MPU_InitStruct.IsBufferable     = MPU_ACCESS_BUFFERABLE;
-    MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
-    MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+    MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;   // ✅ 关键：必须 NOT_BUFFERABLE
+    MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;    // ✅ 关键：必须 NOT_CACHEABLE
+    MPU_InitStruct.IsShareable      = MPU_ACCESS_SHAREABLE;        // 推荐设置为 Shareable
     MPU_InitStruct.Number           = MPU_REGION_NUMBER3;
-    MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;
+    MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;              // Device 类型
     MPU_InitStruct.SubRegionDisable = 0x00;
-    MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+    MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE; // 保险起见，禁止执行
+
     HAL_MPU_ConfigRegion(&MPU_InitStruct);
 #endif
 
