@@ -10,9 +10,9 @@
 // #include "gpio.h"
 
 #include "osal.h"
-#include "ecatuser.h"
 #include "tim.h"
 #include "motor.h"
+#include "ecatutils.h"
 
 #define ECAT_MOTOR_STEP_MAX (81920)
 
@@ -21,8 +21,9 @@ uint64 ref_time_base = 0;
 uint64 sync_start_time = 0;
 int64 app_time_offset = 0;
 uint8 wkc;
-int32_t start_pos = 0;
+
 int32_t step_increment = 10;
+int32_t step_is_enabled = 0;
 int32_t stop_flag = 0;
 
 // 注意：为了和SOEM内部一致，这里索引号为0的实际上没有被使用
@@ -35,57 +36,27 @@ uint32_t dorun = 0;
 int oloop, iloop;
 
 // motor control
-uint8_t startup_step = 0;
+
+
+typedef enum
+{
+  ECAT_MOTOR_INITIALIZING = 0, // 初始化阶段
+  ECAT_MOTOR_IDEL = 1,
+  ECAT_MOTOR_READY,
+  ECAT_MOTOR_SWITCH_ON,
+  ECAT_MOTOR_OPERATION_ENABLED,
+  ECAT_MOTOR_ROTATION_STOP,
+  ECAT_MOTOR_STOP_1,
+  ECAT_MOTOR_STOP_2,
+  ECAT_MOTOR_STOP_3,
+  ECAT_MOTOR_STOP_4, // 保持周期同步
+  ECAT_MOTOR_ERROR
+} motor_state_t;
+static motor_state_t motor_state = ECAT_MOTOR_INITIALIZING;
+
+uint8_t motor_is_stop = 0;
 static motor_pos_t cur_motor_info = {0, 0, 0, 0, 0};
 static uint8_t cur_motor_info_update = 0;
-
-static void _dm9000_delay_ms(uint16_t nms)
-{
-  /**  tips:
-   * 这里主频480MHz rt_hw_us_delay() 大于1000就会卡死
-   * 这里把它限制在500us，大于的部分就拆分
-   * **/
-  rt_uint32_t us = nms * 1000;
-  while (us > 500)
-  {
-    rt_hw_us_delay(500);
-    us -= 500;
-  }
-  rt_hw_us_delay(us);
-}
-
-static int drive_write8(uint16 slave, uint16 index, uint8 subindex, uint8 value)
-{
-  int wkc = 0;
-  wkc = ec_SDOwrite(slave, index, subindex, FALSE, sizeof(value), &value, EC_TIMEOUTRXM);
-  if (wkc <= 0)
-  {
-    rt_kprintf("write8 failed slave:%d index:0x%x subindex:%d value:0x%x wkc:%d\r\n", slave, index, subindex, value, wkc);
-  }
-  return wkc;
-}
-
-static int drive_write16(uint16 slave, uint16 index, uint8 subindex, uint16 value)
-{
-  int wkc = 0;
-  wkc = ec_SDOwrite(slave, index, subindex, FALSE, sizeof(value), &value, EC_TIMEOUTRXM);
-  if (wkc <= 0)
-  {
-    rt_kprintf("write16 failed slave:%d index:0x%x subindex:%d value:0x%x wkc:%d\r\n", slave, index, subindex, value, wkc);
-  }
-  return wkc;
-}
-
-static int drive_write32(uint16 slave, uint16 index, uint8 subindex, uint32 value)
-{
-  int wkc = 0;
-  wkc = ec_SDOwrite(slave, index, subindex, FALSE, sizeof(value), &value, EC_TIMEOUTRXM);
-  if (wkc <= 0)
-  {
-    rt_kprintf("write32 failed slave:%d index:0x%x subindex:%d value:0x%x wkc:%d\r\n", slave, index, subindex, value, wkc);
-  }
-  return wkc;
-}
 
 int Servosetup(uint16 slave)
 {
@@ -133,22 +104,17 @@ void ecat_init(void)
   if (ec_init("eth0"))
   {
     rt_kprintf("ec_init succeeded.\r\n");
-    _dm9000_delay_ms(100);
+    ecat_delay_ms(100);
   _start:
     if (ec_config_init(TRUE) > 0)
     {
       rt_kprintf("%d slaves found and configured.\r\n", ec_slavecount);
-
       if (ec_slavecount >= 1)
       {
         for (slc = 1; slc <= ec_slavecount; slc++)
         {
-
-          for (slc = 1; slc <= ec_slavecount; slc++)
-          {
-            rt_kprintf("Found %s at position %d\n", ec_slave[slc].name, slc);
-            ec_slave[slc].PO2SOconfig = &Servosetup;
-          }
+          rt_kprintf("Found %s at position %d\n", ec_slave[slc].name, slc);
+          ec_slave[slc].PO2SOconfig = &Servosetup;
         }
       }
 
@@ -174,10 +140,6 @@ void ecat_init(void)
       ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE);
       /* read indevidual slave state and store in ec_slave[] */
       ec_readstate();
-
-      rt_kprintf("Slave 0 State=0x%04x\r\n", ec_slave[0].state);
-      rt_kprintf("Slave 1 State=0x%04x\r\n", ec_slave[1].state);
-
       for (cnt = 1; cnt <= ec_slavecount; cnt++)
       {
         rt_kprintf("Slave:%d Name:%s Output size:%3dbits Input size:%3dbits State:%2d delay:%d.%d\n \r",
@@ -185,7 +147,7 @@ void ecat_init(void)
                    ec_slave[cnt].state, (int)ec_slave[cnt].pdelay, ec_slave[cnt].hasdc);
       }
 
-      oloop = ec_slave[0].Obytes; 
+      oloop = ec_slave[0].Obytes;
       if ((oloop == 0) && (ec_slave[0].Obits > 0))
         oloop = 1;
       if (oloop > 30)
@@ -198,7 +160,6 @@ void ecat_init(void)
         iloop = 30;
 
       rt_kprintf("oloop:%d iloop:%d\n\r", oloop, iloop);
-
       rt_kprintf("segments : %d : %d %d %d %d\n \r", ec_group[0].nsegments, ec_group[0].IOsegment[0], ec_group[0].IOsegment[1], ec_group[0].IOsegment[2], ec_group[0].IOsegment[3]);
       rt_kprintf("Request operational state for all slaves\n \r");
       expectedWKC = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC;
@@ -231,10 +192,8 @@ void ecat_init(void)
           inputs[slc] = (PDO_Input *)ec_slave[slc].inputs;
         }
         dorun = 1;
-
         rt_kprintf("all slaves reached operational state.\r\n");
       }
-
       else
       {
         rt_kprintf("Not all slaves reached operational state.\n \r");
@@ -251,18 +210,39 @@ void ecat_init(void)
   }
 }
 
+
+/*
+CIA402状态机
+Not ready to switch on	  驱动器正在初始化，不能进行通讯
+Switch on disabled	      驱动器初始化完成，可进行通讯
+Ready to switch on	      等待进入Switch On状态，电机未被励磁
+Switched on	              驱动器已准备好
+Operation enabled	        驱动器给电机励磁信号，电机使能
+Quick stop active	        驱动器根据设定的方式停机
+Fault reaction active	    驱动器检测到报警，按设定方式停机，电机处于励磁状态
+Fault	                    故障，电机无励磁
+*/
+
+void motor_state_set(motor_state_t sta)
+{
+  motor_state = sta;
+}
+
+motor_state_t motor_state_get(void)
+{
+  return motor_state;
+}
+
 void ecat_loop(void)
 {
   static int statup_delay_cnt = 0;
   if (dorun > 0)
   {
     wkc = ec_receive_processdata(EC_TIMEOUTRET);
-
     int all_ready = 1;
-
-    switch (startup_step)
+    switch (motor_state)
     {
-    case 1: // 初始化 -> Ready to Switch On
+    case ECAT_MOTOR_IDEL: // 初始化 -> Ready to Switch On
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->TargetMode = 8;     // CSP模式
@@ -288,12 +268,10 @@ void ecat_loop(void)
       if (all_ready)
       {
         statup_delay_cnt = 0;
-        startup_step = 2;
+        motor_state_set(ECAT_MOTOR_READY);
       }
-
       break;
-
-    case 2: // Ready to Switch On -> Switched On
+    case ECAT_MOTOR_READY: // Ready to Switch On -> Switched On
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x07;
@@ -317,10 +295,10 @@ void ecat_loop(void)
       }
 
       if (all_ready)
-        startup_step = 3;
+        motor_state_set(ECAT_MOTOR_SWITCH_ON);
       break;
 
-    case 3: // Switched On -> Operation Enabled
+    case ECAT_MOTOR_SWITCH_ON: // Switched On -> Operation Enabled
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x0F;
@@ -337,66 +315,73 @@ void ecat_loop(void)
       }
 
       if (all_ready)
-        startup_step = 4;
+        motor_state_set(ECAT_MOTOR_OPERATION_ENABLED);
       break;
 
-    case 4: // 正常控制阶段（位置模式）
-      // for (int i = 1; i <= ec_slavecount; i++)
-      // {
-      //   rt_base_t level = rt_hw_interrupt_disable();
-      //   outputs[i]->TargetPos += step_increment;
-      //   rt_hw_interrupt_enable(level);
-      // }
-      if (cur_motor_info_update)
+    case ECAT_MOTOR_OPERATION_ENABLED: // 正常控制阶段（位置模式）
+      if(step_is_enabled)
       {
-        // rt_base_t level = rt_hw_interrupt_disable();
-        outputs[1]->TargetPos = cur_motor_info.x;
-        outputs[2]->TargetPos = cur_motor_info.y;
-        outputs[3]->TargetPos = cur_motor_info.z;
-        outputs[4]->TargetPos = cur_motor_info.a;
-        outputs[5]->TargetPos = cur_motor_info.b;
-        // rt_hw_interrupt_enable(level);
-        cur_motor_info_update = 0;
+        for (int i = 1; i <= ec_slavecount; i++)
+        {
+          rt_base_t level = rt_hw_interrupt_disable();
+          outputs[i]->TargetPos += step_increment;
+          rt_hw_interrupt_enable(level);
+        }
+      }
+      else
+      {
+        if (cur_motor_info_update)
+        {
+          // rt_base_t level = rt_hw_interrupt_disable();
+          outputs[1]->TargetPos = cur_motor_info.x;
+          outputs[2]->TargetPos = cur_motor_info.y;
+          outputs[3]->TargetPos = cur_motor_info.z;
+          outputs[4]->TargetPos = cur_motor_info.a;
+          outputs[5]->TargetPos = cur_motor_info.b;
+          // rt_hw_interrupt_enable(level);
+          cur_motor_info_update = 0;
+        }
       }
 
       if (stop_flag)
       {
-        startup_step = 5;
+        motor_state_set(ECAT_MOTOR_ROTATION_STOP);
       }
       break;
-    case 5: // 关闭电机
+    case ECAT_MOTOR_ROTATION_STOP: // 转动停止，保持当前的位置，不再接收新的位置
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x0F;                     // 保持 Operation Enabled
         outputs[i]->TargetPos = inputs[i]->CurrentPosition; // 停止在当前位置
       }
-      startup_step = 6;
-    case 6:
+      motor_state_set(ECAT_MOTOR_STOP_1);
+    case ECAT_MOTOR_STOP_1:
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x07; // Shutdown
       }
-      startup_step = 7;
+      motor_state_set(ECAT_MOTOR_STOP_2);
       break;
-    case 7:
+    case ECAT_MOTOR_STOP_2:
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x06; // Shutdown
       }
-      startup_step = 8;
+      motor_state_set(ECAT_MOTOR_STOP_3);
       break;
-    case 8:
+    case ECAT_MOTOR_STOP_3:
       for (int i = 1; i <= ec_slavecount; i++)
       {
         outputs[i]->ControlWord = 0x00;
       }
-      startup_step = 9;
+      motor_state_set(ECAT_MOTOR_STOP_4);
+      motor_is_stop = 1;
       rt_kprintf("ecat_stop acti\r\n");
       break;
-    case 9:
+    case ECAT_MOTOR_STOP_4: // 保持周期同步
       if (stop_flag == 0)
       {
-        startup_step = 0;
+        motor_state_set(ECAT_MOTOR_INITIALIZING);
       }
       break;
 
@@ -405,11 +390,10 @@ void ecat_loop(void)
       {
         outputs[i]->ControlWord = 0x80; // 带立即更新位
       }
-      startup_step = 1; // 重置状态机
-
+      motor_state_set(ECAT_MOTOR_IDEL);
       break;
     }
-
+    
     ec_send_processdata();
   }
 }
@@ -418,7 +402,7 @@ void ecat_test_main(void *parameter)
 {
   rt_hw_stm32_tim();
   HAL_TIM_Base_Start_IT(&htim4);
-  _dm9000_delay_ms(100);
+  ecat_delay_ms(100);
   ecat_init();
 }
 
@@ -454,6 +438,73 @@ int ecat_stop(void)
 }
 MSH_CMD_EXPORT(ecat_stop, "ecat_stop");
 
+#define MAX_SAFEOP_RETRY 3
+#define SAFEOP_TIMEOUT_MS 100
+
+/**
+ * 尝试将所有从站设置为 SAFE_OP 状态，包含重试机制
+ * 返回 0 表示成功，-1 表示失败
+ */
+int ec_try_set_state_safe_op(void)
+{
+  int retry = 0;
+  int result = 0;
+
+  while (retry < MAX_SAFEOP_RETRY)
+  {
+    ec_slave[0].state = EC_STATE_SAFE_OP;
+    ec_writestate(0);
+
+    result = ec_statecheck(0, EC_STATE_SAFE_OP, SAFEOP_TIMEOUT_MS);
+
+    if (result == EC_STATE_SAFE_OP)
+    {
+      rt_kprintf("✅ 所有从站成功进入 SAFE_OP 状态（尝试 %d 次）\n", retry + 1);
+      return 0;
+    }
+
+    rt_kprintf("⚠️ 第 %d 次尝试 SAFE_OP 失败，返回状态 0x%04X，重试...\n", retry + 1, result);
+    retry++;
+  }
+
+  rt_kprintf("❌ 所有重试失败，无法进入 SAFE_OP 状态\n");
+  return -1;
+}
+
+#define MAX_OP_RETRY 20
+#define OP_TIMEOUT_MS 100
+
+/**
+ * 尝试将所有从站设置为 OPERATIONAL 状态，包含重试机制
+ * 返回 0 表示成功，-1 表示失败
+ */
+int ec_try_set_state_op(void)
+{
+  int retry = 0;
+  int result = 0;
+
+  ec_slave[0].state = EC_STATE_OPERATIONAL;
+  ec_send_processdata();
+  ec_receive_processdata(EC_TIMEOUTRET);
+  ec_writestate(0);
+  int chk = 100;
+  do
+  {
+    ec_send_processdata();
+    ec_receive_processdata(EC_TIMEOUTRET);
+    ec_statecheck(0, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
+  } while (chk-- && ec_slave[0].state != EC_STATE_OPERATIONAL);
+  rt_kprintf("\r\nchk:%d %d %d\r\n", chk, ec_slave[0].state, ec_slave[1].state);
+
+  if (ec_slave[0].state != EC_STATE_OPERATIONAL)
+  {
+    rt_kprintf("ec_try_set_state_op: Failed to set state to OPERATIONAL, current state: 0x%04X\r\n", ec_slave[0].state);
+    return -1;
+  }
+
+  return 0;
+}
+
 int ecat_continue(void)
 {
   if (stop_flag)
@@ -468,21 +519,20 @@ MSH_CMD_EXPORT(ecat_continue, "ecat_continue");
 int ecat_status(void)
 {
   rt_kprintf("dorun:%d\r\n", dorun);
-  rt_kprintf("startup_step:%d\r\n", startup_step);
+  rt_kprintf("motor_state:%d\r\n", motor_state);
   rt_kprintf("stop_flag:%d\r\n", stop_flag);
   rt_kprintf("ec_slavecount:%d\r\n", ec_slavecount);
-  rt_kprintf("cur_motor_info x:%08d y:%08d z:%08d a:%08d b:%08d\r\n", 
-    cur_motor_info.x, cur_motor_info.y, cur_motor_info.z, cur_motor_info.a, cur_motor_info.b);
+  rt_kprintf("cur_motor_info x:%08d y:%08d z:%08d a:%08d b:%08d\r\n",
+             cur_motor_info.x, cur_motor_info.y, cur_motor_info.z, cur_motor_info.a, cur_motor_info.b);
 
   if (dorun > 0)
   {
-    for(int i=1; i<=ec_slavecount; i++)
+    for (int i = 1; i <= ec_slavecount; i++)
     {
       rt_kprintf("state:%d; StatusWord:%x, CurrentPosition:%8ld,TargetMode:%d CurrentTorque:%8d CurrentSpeed:%8d ServoError:%d\r\n",
-               ec_slave[i].state, inputs[i]->StatusWord, inputs[i]->CurrentPosition, inputs[i]->TargetMode,
-               inputs[i]->CurrentTorque, inputs[i]->CurrentSpeed, inputs[i]->ServoError);
+                 ec_slave[i].state, inputs[i]->StatusWord, inputs[i]->CurrentPosition, inputs[i]->TargetMode,
+                 inputs[i]->CurrentTorque, inputs[i]->CurrentSpeed, inputs[i]->ServoError);
     }
-    
   }
   else
   {
@@ -510,12 +560,13 @@ void ecat_set_pos(int argc, char **argv)
     return;
   }
 
+  step_is_enabled = 1;
   step_increment = atoi(argv[1]);
   rt_kprintf("ecat_set_pos step_increment:%d\r\n", step_increment);
 }
 MSH_CMD_EXPORT(ecat_set_pos, "ecat_set_pos");
 
-//////////////////////////////// 电机控制对外接口 //////////////////////////////////////////////////////////// 
+//////////////////////////////// 电机控制对外接口 ////////////////////////////////////////////////////////////
 int motor_set(motor_pos_t *pos)
 {
   if (pos == NULL)
@@ -530,7 +581,7 @@ int motor_set(motor_pos_t *pos)
     return -1;
   }
 
-  if (startup_step != 4)
+  if (motor_state != ECAT_MOTOR_OPERATION_ENABLED)
   {
     rt_kprintf("ecat not in operation enabled state\r\n");
     return -1;
@@ -549,6 +600,13 @@ int motor_set(motor_pos_t *pos)
     return -1;
   }
 
+  if(motor_get(&cur_motor_info) < 0)
+  {
+    rt_kprintf("ecat_motor_ctrl: motor_get failed\r\n");
+    return -1;
+  }
+
+  cur_motor_info_update = 0;
   cur_motor_info.x += pos->x;
   cur_motor_info.y += pos->y;
   cur_motor_info.z += pos->z;
@@ -573,7 +631,7 @@ int motor_get(motor_pos_t *pos)
     return -1;
   }
 
-  if (startup_step != 4)
+  if (motor_state != ECAT_MOTOR_OPERATION_ENABLED)
   {
     rt_kprintf("ecat not in operation enabled state\r\n");
     return -1;
@@ -591,12 +649,14 @@ int motor_get(motor_pos_t *pos)
 void motor_set_test(int argc, char **argv)
 {
 
-  if(argc != 6)
+  if (argc != 6)
   {
     rt_kprintf("Usage: motor_set_test x y z a b\r\n");
     rt_kprintf("rg: motor_set_test 100 200 300 400 500\r\n");
     return;
   }
+
+  step_is_enabled = 0;
 
   motor_pos_t m_info = {0, 0, 0, 0, 0};
   m_info.x = atoi(argv[1]);
@@ -616,6 +676,8 @@ void motor_set_test(int argc, char **argv)
   {
     rt_kprintf("ecat_motor_ctrl success\r\n");
   }
+
+  
 }
 MSH_CMD_EXPORT(motor_set_test, "motor_set_test");
 
@@ -657,3 +719,105 @@ int motor_deinit(void)
   return RT_EOK;
 }
 MSH_CMD_EXPORT(motor_deinit, "motor_deinit");
+
+int motor_exit_op(void)
+{
+  motor_is_stop = 0;
+  int time_out = 0;
+  ecat_stop();
+  // 等待所有电机停止
+  while (motor_is_stop == 0)
+  {
+    rt_thread_mdelay(10);
+    time_out++;
+    if (time_out > 3000)
+    {
+      rt_kprintf("ecat_exit_op: timeout waiting for motors to stop\r\n");
+      return -1;
+    }
+  }
+
+  // 进入safe state
+  return ec_try_set_state_safe_op();
+}
+MSH_CMD_EXPORT(motor_exit_op, "motor_exit_op");
+
+int motor_enter_op(void)
+{
+  // 1. 进入OP状态
+  if (ec_try_set_state_op() < 0)
+  {
+    rt_kprintf("ecat_enter_op: Failed to enter OP state\r\n");
+    return -1;
+  }
+  return ecat_continue();
+}
+MSH_CMD_EXPORT(motor_enter_op, "motor_enter_op");
+
+int motor_ec_SDOwrite(uint16 Slave, uint16 Index, uint8 SubIndex,
+                      boolean CA, int psize, void *p, int Timeout)
+{
+  // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
+  return ec_SDOwrite(Slave, Index, SubIndex, CA, psize, p, Timeout);
+}
+
+int motor_ec_SDOread(uint16 Slave, uint16 Index, uint8 SubIndex,
+                     boolean CA, int *psize, void *p, int Timeout)
+{
+  // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
+  return ec_SDOread(Slave, Index, SubIndex, CA, psize, p, Timeout);
+}
+
+int motor_SDO_rw_test(void)
+{
+  // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
+  uint32_t cur_value = 0;
+  int wkc = 0;
+
+  // 1. 读取原始值
+  wkc = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);  // 用户位置偏差过大阈值
+  if (wkc <= 0)
+  {
+    rt_kprintf("motor_SDO_rw_test read16 failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+  rt_kprintf("0x6065[0]:0x%x wkc:%d\r\n", cur_value, wkc);
+
+  // 2. 写入测试值
+  uint32_t test_val = 0x1234;
+  wkc = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(test_val), &test_val, EC_TIMEOUTRXM);
+  if (wkc <= 0)
+  {
+    rt_kprintf("motor_SDO_rw_test write16 failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+
+  // 3. 读取验证
+  uint32_t tmp_val = 0;
+  wkc = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(tmp_val), &tmp_val, EC_TIMEOUTRXM);
+  if (wkc <= 0)
+  {
+    rt_kprintf("motor_ec_SDOwrite failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+  rt_kprintf("0x6065[0]:0x%x wkc:%d\r\n", tmp_val, wkc);
+
+  if (tmp_val != test_val)
+  {
+    rt_kprintf("check failed expected:0x%x, got:0x%x\r\n", test_val, tmp_val);
+    return -1;
+  }
+  rt_kprintf("check succ tmp_val:0x%x test_val:0x%x\r\n", tmp_val, test_val);
+
+  // 4. 写回原始值
+  wkc = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);
+  if (wkc <= 0)
+  {
+    rt_kprintf("motor_ec_SDOwrite failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+  rt_kprintf("motor_SDO_rw_test write back 0x6065[0]:0x%x wkc:%d\r\n", cur_value, wkc);
+
+  return 0;
+}
+MSH_CMD_EXPORT(motor_SDO_rw_test, "motor_SDO_rw_test");

@@ -38,6 +38,7 @@ void do_tcp_server_test(void)
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len;
     int ret;
+    int cnt = 0;
 
     server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0)
@@ -45,6 +46,10 @@ void do_tcp_server_test(void)
         rt_kprintf("Socket create failed\n");
         return;
     }
+
+    // 加这几行允许端口复用
+    int opt = 1;
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -65,16 +70,21 @@ void do_tcp_server_test(void)
         return;
     }
 
-    rt_kprintf("TCP server is listening on ip:%s port %d \n",  get_ip_addr("dm"), TCP_SERVER_PORT);
+    rt_kprintf("TCP server is listening on port %d\n", TCP_SERVER_PORT);
     addr_len = sizeof(client_addr);
     client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len);
     if (client_sock < 0)
     {
         rt_kprintf("Accept failed\n");
+        closesocket(server_sock);
+        return;
     }
 
+    rt_kprintf("Accepted connection from %s:%d\n",
+               inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
     char *buf = rt_malloc(BUF_SIZE);
-    if(buf == RT_NULL)
+    if (buf == RT_NULL)
     {
         rt_kprintf("Memory allocation failed\n");
         closesocket(client_sock);
@@ -84,22 +94,36 @@ void do_tcp_server_test(void)
 
     while (1)
     {
-        ret = recv(client_sock, buf, BUF_SIZE-1, 0);
+        ret = recv(client_sock, buf, BUF_SIZE - 1, 0);
         if (ret > 0)
         {
             buf[ret] = '\0';
-            // rt_kprintf("Received from client: %s\n", recv_buf);
-            send(client_sock, buf, ret, 0); // Echo back
-            if(strcmp(buf, "exit") == 0)
+            send(client_sock, buf, ret, 0); // 回显
+
+            if (strcmp(buf, "exit") == 0)
             {
                 rt_kprintf("Client requested to close connection.\n");
-                break; // Exit the loop if client sends "exit"
+                break;
             }
         }
+        else if (ret == 0)
+        {
+            rt_kprintf("Client closed the connection.\n");
+            break;
+        }
+        else
+        {
+            rt_kprintf("recv error: %d\n", errno);
+            break;
+        }
+
         cnt++;
     }
+
     closesocket(client_sock);
+    closesocket(server_sock);
     rt_free(buf);
+    rt_kprintf("TCP server test finished, total received messages: %d\n", cnt);
 }
 
 int tcp_server_test(void)
@@ -108,7 +132,7 @@ int tcp_server_test(void)
   tid = rt_thread_create("tcp_server_test",
                          do_tcp_server_test,
                          RT_NULL,
-                         1024 * 8,
+                         1024 * 1.5,
                          25,
                          2);
   if (tid != RT_NULL)
