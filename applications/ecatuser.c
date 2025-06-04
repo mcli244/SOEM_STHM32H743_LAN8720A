@@ -237,7 +237,7 @@ void ecat_loop(void)
   static int statup_delay_cnt = 0;
   if (dorun > 0)
   {
-    int wkc = ec_receive_processdata(EC_TIMEOUTRET);
+    ec_receive_processdata(EC_TIMEOUTRET);
     int all_ready = 1;
     switch (motor_state)
     {
@@ -482,7 +482,6 @@ int ec_try_set_state_safe_op(void)
  */
 int ec_try_set_state_op(void)
 {
-  int retry = 0;
   int result = 0;
 
   // ✅ 先检查是否已经处于 OPERATIONAL 状态
@@ -822,10 +821,11 @@ int motor_SDO_rw_test(void)
 {
   // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
   uint32_t cur_value = 0;
+  int size = sizeof(cur_value);
   int ret = 0;
 
   // 1. 读取原始值
-  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);  // 用户位置偏差过大阈值
+  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, &size, &cur_value, EC_TIMEOUTRXM);  // 用户位置偏差过大阈值
   if (ret < 0)
   {
     rt_kprintf("motor_ec_SDOread failed ret:%d\r\n", ret);
@@ -835,7 +835,7 @@ int motor_SDO_rw_test(void)
 
   // 2. 写入测试值
   uint32_t test_val = 0x1234;
-  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(test_val), &test_val, EC_TIMEOUTRXM);
+  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, size, &test_val, EC_TIMEOUTRXM);
   if (ret < 0)
   {
     rt_kprintf("motor_ec_SDOwritefailed ret:%d\r\n", ret);
@@ -844,7 +844,7 @@ int motor_SDO_rw_test(void)
 
   // 3. 读取验证
   uint32_t tmp_val = 0;
-  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(tmp_val), &tmp_val, EC_TIMEOUTRXM);
+  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, &size, &tmp_val, EC_TIMEOUTRXM);
   if (ret < 0)
   {
     rt_kprintf("motor_ec_SDOread failed ret:%d\r\n", ret);
@@ -853,7 +853,7 @@ int motor_SDO_rw_test(void)
   rt_kprintf("0x6065[0]:0x%x ret:%d\r\n", tmp_val, ret);
 
   // 4. 写回原始值
-  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);
+  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, size, &cur_value, EC_TIMEOUTRXM);
   if (ret < 0)
   {
     rt_kprintf("motor_ec_SDOwrite failed ret:%d\r\n", ret);
