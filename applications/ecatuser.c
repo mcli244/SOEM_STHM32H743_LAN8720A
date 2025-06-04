@@ -20,7 +20,6 @@ uint64 app_time_base = 0;
 uint64 ref_time_base = 0;
 uint64 sync_start_time = 0;
 int64 app_time_offset = 0;
-uint8 wkc;
 
 int32_t step_increment = 10;
 int32_t step_is_enabled = 0;
@@ -238,7 +237,7 @@ void ecat_loop(void)
   static int statup_delay_cnt = 0;
   if (dorun > 0)
   {
-    wkc = ec_receive_processdata(EC_TIMEOUTRET);
+    int wkc = ec_receive_processdata(EC_TIMEOUTRET);
     int all_ready = 1;
     switch (motor_state)
     {
@@ -277,12 +276,6 @@ void ecat_loop(void)
         outputs[i]->ControlWord = 0x07;
         outputs[i]->TargetPos = inputs[i]->CurrentPosition; // 初始对齐
       }
-
-      cur_motor_info.x = inputs[1]->CurrentPosition;
-      cur_motor_info.y = inputs[2]->CurrentPosition;
-      cur_motor_info.z = inputs[3]->CurrentPosition;
-      cur_motor_info.a = inputs[4]->CurrentPosition;
-      cur_motor_info.b = inputs[5]->CurrentPosition;
 
       for (int i = 1; i <= ec_slavecount; i++)
       {
@@ -382,6 +375,7 @@ void ecat_loop(void)
       if (stop_flag == 0)
       {
         motor_state_set(ECAT_MOTOR_INITIALIZING);
+        motor_is_stop = 0;
       }
       break;
 
@@ -438,7 +432,7 @@ int ecat_stop(void)
 }
 MSH_CMD_EXPORT(ecat_stop, "ecat_stop");
 
-#define MAX_SAFEOP_RETRY 3
+#define MAX_SAFEOP_RETRY 10
 #define SAFEOP_TIMEOUT_MS 100
 
 /**
@@ -450,13 +444,21 @@ int ec_try_set_state_safe_op(void)
   int retry = 0;
   int result = 0;
 
+  // 先检查是否已经处于 SAFE_OP 状态
+  result = ec_statecheck(0, EC_STATE_SAFE_OP, SAFEOP_TIMEOUT_MS / 2);
+  if (result == EC_STATE_SAFE_OP)
+  {
+      rt_kprintf("ℹ️ 当前已处于 SAFE_OP 状态，无需切换\n");
+      return 0;
+  }
+  rt_kprintf("result:%d\n", result);
+
   while (retry < MAX_SAFEOP_RETRY)
   {
     ec_slave[0].state = EC_STATE_SAFE_OP;
     ec_writestate(0);
 
     result = ec_statecheck(0, EC_STATE_SAFE_OP, SAFEOP_TIMEOUT_MS);
-
     if (result == EC_STATE_SAFE_OP)
     {
       rt_kprintf("✅ 所有从站成功进入 SAFE_OP 状态（尝试 %d 次）\n", retry + 1);
@@ -483,10 +485,20 @@ int ec_try_set_state_op(void)
   int retry = 0;
   int result = 0;
 
+  // ✅ 先检查是否已经处于 OPERATIONAL 状态
+  result = ec_statecheck(0, EC_STATE_OPERATIONAL, EC_TIMEOUTRET / 2);
+  if (result == EC_STATE_OPERATIONAL)
+  {
+      rt_kprintf("ℹ️ 当前已处于 OPERATIONAL 状态，无需切换\n");
+      return 0;
+  }
+
+  // ✅ 设置期望状态为 OP
   ec_slave[0].state = EC_STATE_OPERATIONAL;
   ec_send_processdata();
   ec_receive_processdata(EC_TIMEOUTRET);
   ec_writestate(0);
+
   int chk = 100;
   do
   {
@@ -494,14 +506,17 @@ int ec_try_set_state_op(void)
     ec_receive_processdata(EC_TIMEOUTRET);
     ec_statecheck(0, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
   } while (chk-- && ec_slave[0].state != EC_STATE_OPERATIONAL);
-  rt_kprintf("\r\nchk:%d %d %d\r\n", chk, ec_slave[0].state, ec_slave[1].state);
+
+  rt_kprintf("\r\nchk: %d  master: 0x%04X  slave1: 0x%04X\r\n",
+              chk, ec_slave[0].state, ec_slave[1].state);
 
   if (ec_slave[0].state != EC_STATE_OPERATIONAL)
   {
-    rt_kprintf("ec_try_set_state_op: Failed to set state to OPERATIONAL, current state: 0x%04X\r\n", ec_slave[0].state);
-    return -1;
+      rt_kprintf("❌ ec_try_set_state_op: 设置 OPERATIONAL 失败，当前状态: 0x%04X\r\n", ec_slave[0].state);
+      return -1;
   }
 
+  rt_kprintf("✅ 所有从站成功进入 OPERATIONAL 状态\n");
   return 0;
 }
 
@@ -701,10 +716,9 @@ MSH_CMD_EXPORT(motor_get_test, "motor_get_test");
 
 int motor_init(void)
 {
-  rt_thread_t th = rt_thread_find("myth");
-  if (th != RT_NULL)
+  if (dorun > 0)
   {
-    rt_kprintf("motor_init: thread already exists\r\n");
+    rt_kprintf("motor_init: motor already init\r\n");
     return -1;
   }
 
@@ -720,8 +734,14 @@ int motor_deinit(void)
 }
 MSH_CMD_EXPORT(motor_deinit, "motor_deinit");
 
-int motor_exit_op(void)
+int motor_ec_exit_op(void)
 {
+  if(motor_is_stop == 1)
+  {
+    rt_kprintf("ecat_exit_op: motors already stopped\r\n");
+    return 0;
+  }
+
   motor_is_stop = 0;
   int time_out = 0;
   ecat_stop();
@@ -730,7 +750,7 @@ int motor_exit_op(void)
   {
     rt_thread_mdelay(10);
     time_out++;
-    if (time_out > 3000)
+    if (time_out > 300)
     {
       rt_kprintf("ecat_exit_op: timeout waiting for motors to stop\r\n");
       return -1;
@@ -740,10 +760,16 @@ int motor_exit_op(void)
   // 进入safe state
   return ec_try_set_state_safe_op();
 }
-MSH_CMD_EXPORT(motor_exit_op, "motor_exit_op");
+MSH_CMD_EXPORT(motor_ec_exit_op, "motor_ec_exit_op");
 
-int motor_enter_op(void)
+int motor_ec_enter_op(void)
 {
+  if(motor_is_stop == 0)
+  {
+    rt_kprintf("ecat_exit_op: motors already running\r\n");
+    return 0;
+  }
+
   // 1. 进入OP状态
   if (ec_try_set_state_op() < 0)
   {
@@ -752,71 +778,95 @@ int motor_enter_op(void)
   }
   return ecat_continue();
 }
-MSH_CMD_EXPORT(motor_enter_op, "motor_enter_op");
+MSH_CMD_EXPORT(motor_ec_enter_op, "motor_ec_enter_op");
 
 int motor_ec_SDOwrite(uint16 Slave, uint16 Index, uint8 SubIndex,
                       boolean CA, int psize, void *p, int Timeout)
 {
-  // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
-  return ec_SDOwrite(Slave, Index, SubIndex, CA, psize, p, Timeout);
+  if(motor_is_stop == 0)
+  {
+    rt_kprintf("OP mode! The SDO operation is disabled\r\n");
+    return -1;
+  }
+
+  int wkc = ec_SDOwrite(Slave, Index, SubIndex, CA, psize, p, Timeout);
+  if(wkc <= 0)
+  {
+    rt_kprintf("motor_ec_SDOwrite failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+
+  return 0;
 }
 
 int motor_ec_SDOread(uint16 Slave, uint16 Index, uint8 SubIndex,
                      boolean CA, int *psize, void *p, int Timeout)
 {
-  // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
-  return ec_SDOread(Slave, Index, SubIndex, CA, psize, p, Timeout);
+  if(motor_is_stop == 0)
+  {
+    rt_kprintf("OP mode! The SDO operation is disabled\r\n");
+    return -1;
+  }
+
+  int wkc = ec_SDOread(Slave, Index, SubIndex, CA, psize, p, Timeout);
+  if(wkc <= 0)
+  {
+    rt_kprintf("ec_SDOread failed wkc:%d\r\n", wkc);
+    return -1;
+  }
+
+  return 0;
 }
 
 int motor_SDO_rw_test(void)
 {
   // TODO: 需要判断当前状态，PDO模式下不能读取，会打断周期同步
   uint32_t cur_value = 0;
-  int wkc = 0;
+  int ret = 0;
 
   // 1. 读取原始值
-  wkc = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);  // 用户位置偏差过大阈值
-  if (wkc <= 0)
+  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);  // 用户位置偏差过大阈值
+  if (ret < 0)
   {
-    rt_kprintf("motor_SDO_rw_test read16 failed wkc:%d\r\n", wkc);
+    rt_kprintf("motor_ec_SDOread failed ret:%d\r\n", ret);
     return -1;
   }
-  rt_kprintf("0x6065[0]:0x%x wkc:%d\r\n", cur_value, wkc);
+  rt_kprintf("0x6065[0]:0x%x ret:%d\r\n", cur_value, ret);
 
   // 2. 写入测试值
   uint32_t test_val = 0x1234;
-  wkc = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(test_val), &test_val, EC_TIMEOUTRXM);
-  if (wkc <= 0)
+  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(test_val), &test_val, EC_TIMEOUTRXM);
+  if (ret < 0)
   {
-    rt_kprintf("motor_SDO_rw_test write16 failed wkc:%d\r\n", wkc);
+    rt_kprintf("motor_ec_SDOwritefailed ret:%d\r\n", ret);
     return -1;
   }
 
   // 3. 读取验证
   uint32_t tmp_val = 0;
-  wkc = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(tmp_val), &tmp_val, EC_TIMEOUTRXM);
-  if (wkc <= 0)
+  ret = motor_ec_SDOread(1, 0x6065, 0, FALSE, sizeof(tmp_val), &tmp_val, EC_TIMEOUTRXM);
+  if (ret < 0)
   {
-    rt_kprintf("motor_ec_SDOwrite failed wkc:%d\r\n", wkc);
+    rt_kprintf("motor_ec_SDOread failed ret:%d\r\n", ret);
     return -1;
   }
-  rt_kprintf("0x6065[0]:0x%x wkc:%d\r\n", tmp_val, wkc);
+  rt_kprintf("0x6065[0]:0x%x ret:%d\r\n", tmp_val, ret);
+
+  // 4. 写回原始值
+  ret = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);
+  if (ret < 0)
+  {
+    rt_kprintf("motor_ec_SDOwrite failed ret:%d\r\n", ret);
+    return -1;
+  }
+  rt_kprintf("motor_SDO_rw_test write back 0x6065[0]:0x%x ret:%d\r\n", cur_value, ret);
 
   if (tmp_val != test_val)
   {
     rt_kprintf("check failed expected:0x%x, got:0x%x\r\n", test_val, tmp_val);
     return -1;
   }
-  rt_kprintf("check succ tmp_val:0x%x test_val:0x%x\r\n", tmp_val, test_val);
-
-  // 4. 写回原始值
-  wkc = motor_ec_SDOwrite(1, 0x6065, 0, FALSE, sizeof(cur_value), &cur_value, EC_TIMEOUTRXM);
-  if (wkc <= 0)
-  {
-    rt_kprintf("motor_ec_SDOwrite failed wkc:%d\r\n", wkc);
-    return -1;
-  }
-  rt_kprintf("motor_SDO_rw_test write back 0x6065[0]:0x%x wkc:%d\r\n", cur_value, wkc);
+  rt_kprintf("motor_SDO_rw_test successful tmp_val:0x%x test_val:0x%x\r\n", tmp_val, test_val);
 
   return 0;
 }
