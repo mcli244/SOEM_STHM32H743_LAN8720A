@@ -11,6 +11,7 @@
 #include <lwip/inet.h>
 #include <lwip/netif.h>
 #include <lwip/pbuf.h>
+#include <lwip/opt.h>
 #include <netdev.h>
 
 #define LOG_TAG "drv.dm9000"
@@ -45,6 +46,8 @@ static struct dm9000_net_eth dm9000_net_dev =
         .multicase_addr = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
         .mode = DM9000_100MFD,
 };
+
+int dm_irq_cnt = 0;
 /***************** netdev end**********************/
 
 #ifndef DM9000_USE_LWIP
@@ -175,7 +178,7 @@ void DM9000_FMC_Config(void)
     hsram1.Init.NSBank              = FMC_NORSRAM_BANK1;
     hsram1.Init.DataAddressMux      = FMC_DATA_ADDRESS_MUX_DISABLE;
     hsram1.Init.MemoryType          = FMC_MEMORY_TYPE_SRAM;
-    hsram1.Init.MemoryDataWidth     = FMC_NORSRAM_MEM_BUS_WIDTH_32; // 这里要注意，使用CUBEMX按16b生成，这里手动改成32b
+    hsram1.Init.MemoryDataWidth     = FMC_NORSRAM_MEM_BUS_WIDTH_16; 
     hsram1.Init.BurstAccessMode     = FMC_BURST_ACCESS_MODE_DISABLE;
     hsram1.Init.WaitSignalPolarity  = FMC_WAIT_SIGNAL_POLARITY_LOW;
     hsram1.Init.WaitSignalActive    = FMC_WAIT_TIMING_BEFORE_WS;
@@ -187,13 +190,16 @@ void DM9000_FMC_Config(void)
     hsram1.Init.ContinuousClock     = FMC_CONTINUOUS_CLOCK_SYNC_ONLY;
     hsram1.Init.WriteFifo           = FMC_WRITE_FIFO_DISABLE;
     hsram1.Init.PageSize            = FMC_PAGE_SIZE_NONE;
+
+
+    // 使用的HCLK 120M = 8.3ns
     /* Timing */
-    Timing.AddressSetupTime         = 8;
-    Timing.AddressHoldTime          = 1;
-    Timing.DataSetupTime            = 4;
-    Timing.BusTurnAroundDuration    = 15;
-    Timing.CLKDivision              = 2;
-    Timing.DataLatency              = 2;
+    Timing.AddressSetupTime         = 10;       // DM9000手册建议地址建立时间为大于80ns F0寄存器
+    Timing.AddressHoldTime          = 0;        // 模式A没用上
+    Timing.DataSetupTime            = 2;        // DM9000手册建议数据建立时间为大于10ns  
+    Timing.BusTurnAroundDuration    = 2;        // 片选信号，高脉宽
+    Timing.CLKDivision              = 0;        // 模式A没用上
+    Timing.DataLatency              = 0;        // 模式A没用上
     Timing.AccessMode               = FMC_ACCESS_MODE_A;
     if (HAL_SRAM_Init(&hsram1, &Timing, NULL) != HAL_OK)
     {
@@ -213,7 +219,7 @@ void DM9000_FMC_Config(void)
 // 返回值：DM9000指定寄存器的值
 uint16_t DM9000_ReadReg(uint16_t reg)
 {
-    DM9000->REG = reg;
+    DM9000->REG = reg; //__DSB();
     return DM9000->DATA;
 }
 
@@ -222,8 +228,8 @@ uint16_t DM9000_ReadReg(uint16_t reg)
 // data:要写入的值
 void DM9000_WriteReg(uint16_t reg, uint16_t data)
 {
-    DM9000->REG = reg;
-    DM9000->DATA = data;
+    DM9000->REG = reg; //__DSB();
+    DM9000->DATA = data; //__DSB();
 }
 
 // 读取DM9000的PHY的指定寄存器
@@ -429,7 +435,7 @@ int DM9000_Init(void)
     // 设置MAC地址和组播地址
     DM9000_Set_MACAddress(dm9000_net_dev.mac_addr);      // 设置MAC地址
     DM9000_Set_Multicast(dm9000_net_dev.multicase_addr); // 设置组播地址
-    DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN);
+    DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_RXEN);
     // DM9000_WriteReg(DM9000_RCR, 0x3B);  // 开启 promiscuous 接收所有包
     // DM9000_WriteReg(DM9000_RCR, 0x1F); // 启用所有接收模式，包括广播、接收长度较小的数据包等
 
@@ -496,6 +502,7 @@ void DM9000_SendPacket(struct pbuf *p)
 // byte3:本帧数据长度的低字节
 // byte4:本帧数据长度的高字节
 // 返回值：pbuf格式的接收到的数据包
+#if 0
 struct pbuf *DM9000_Receive_Packet(void)
 {
     struct pbuf *p;
@@ -504,87 +511,203 @@ struct pbuf *DM9000_Receive_Packet(void)
     vu16 rx_status, rx_length;
     u16 *data;
     u16 dummy;
-    int len;
+    int len, i;
 
     p = NULL;
 
     DM9000_DUG("DM9000_Receive_Packet\r\n");
-__error_retry:
-    DM9000_ReadReg(DM9000_MRCMDX); // 假读
-    rxbyte = (u8)DM9000->DATA;     // 进行第二次读取
-    if (rxbyte)                    // 接收到数据
+
+    __error_retry:
+        DM9000_ReadReg(DM9000_MRRH); // 读取这两个寄存器
+        DM9000_ReadReg(DM9000_MRRL);
+        DM9000_ReadReg(DM9000_MRCMDX); // 假读
+        rxbyte = (u8)DM9000->DATA;     // 进行第二次读取
+        //__DSB();
+        if (rxbyte)                    // 接收到数据
+        {
+            if (rxbyte > 1) // rxbyte大于1，接收到的数据错误,挂了
+            {
+                rt_kprintf("dm9000 rx: rx error, stop device rxbyte:0x%x\r\n", rxbyte);
+                DM9000_WriteReg(DM9000_RCR, 0x00);
+                DM9000_WriteReg(DM9000_ISR, 0x80);
+                DM9000_WriteReg(DM9000_NCR, NCR_RST);  // 软复位
+                _dm9000_delay_ms(5);
+                DM9000_WriteReg(DM9000_RCR, 0x39);     // 恢复接收
+                return (struct pbuf *)p;
+            }
+            DM9000->REG = DM9000_MRCMD;//__DSB();
+            rx_status = DM9000->DATA;//__DSB();
+            rx_length = DM9000->DATA;//__DSB();
+            DM9000_DUG("rx_status:0x%x rx_length: %d\r\n", rx_status, rx_length);
+            // if(rx_length>512)rt_kprintf("rxlen:%d\r\n",rx_length);
+            p = pbuf_alloc(PBUF_RAW, rx_length, PBUF_POOL); // pbufs内存池分配pbuf
+            if (p != NULL)                                  // 内存申请成功
+            {
+                for (q = p; q != NULL; q = q->next)
+                {
+                    data = (u16 *)q->payload;
+                    len = (q->len + 1) / 2;
+                    for (i = 0; i < len; i++)
+                    {
+                        ((u16 *) data)[i] = DM9000->DATA;
+                        //__DSB();
+                    }
+                        
+                }
+            }
+            else // 内存申请失败
+            {
+                rt_kprintf("pbuf内存申请失败:%d\r\n", rx_length);
+                data = &dummy;
+                len = rx_length;
+                while (len)
+                {
+                    *data = DM9000->DATA;
+                    len -= 2;
+                }
+            }
+            // 根据rx_status判断接收数据是否出现如下错误：FIFO溢出、CRC错误
+            // 对齐错误、物理层错误，如果有任何一个出现的话丢弃该数据帧，
+            // 当rx_length小于64或者大于最大数据长度的时候也丢弃该数据帧
+            if ((rx_status & 0XBF00) || (rx_length < 0X40) || (rx_length > DM9000_PKT_MAX))
+            {
+                rt_kprintf("rx_status:%#x\r\n", rx_status);
+                if (rx_status & 0x100)
+                    rt_kprintf("rx fifo error\r\n");
+                if (rx_status & 0x200)
+                    rt_kprintf("rx crc error\r\n");
+                if (rx_status & 0x8000)
+                    rt_kprintf("rx length error\r\n");
+                if (rx_length > DM9000_PKT_MAX)
+                {
+                    rt_kprintf("rx length too big\r\n");
+                    DM9000_WriteReg(DM9000_NCR, NCR_RST); // 复位DM9000
+                    _dm9000_delay_ms(5);
+                }
+                if (p != NULL)
+                    pbuf_free((struct pbuf *)p); // 释放内存
+                p = NULL;
+                goto __error_retry;
+            }
+        }
+        else
+        {
+            DM9000_WriteReg(DM9000_ISR,ISR_PTS);			//清除所有中断标志位
+            dm9000_net_dev.imr_all=IMR_PAR|IMR_PRI;				//重新接收中断
+            DM9000_WriteReg(DM9000_IMR, dm9000_net_dev.imr_all);
+        }
+
+    return (struct pbuf *)p;
+}
+
+#else
+struct pbuf *DM9000_Receive_Packet(void)
+{
+    struct pbuf *head = NULL;  // 链表头
+    struct pbuf *tail = NULL;  // 链表尾
+    struct pbuf *p, *q;
+    u32 rxbyte;
+    vu16 rx_status, rx_length;
+    u16 *data;
+    u16 dummy;
+    int len, i;
+
+    DM9000_DUG("DM9000_Receive_Packets\r\n");
+
+    while (1)
     {
-        if (rxbyte > 1) // rxbyte大于1，接收到的数据错误,挂了
+        DM9000_ReadReg(DM9000_MRRH);
+        DM9000_ReadReg(DM9000_MRRL);
+        DM9000_ReadReg(DM9000_MRCMDX);  // 假读
+        rxbyte = (u8)DM9000->DATA;
+        //__DSB();
+
+        if (rxbyte == 0)
+        {
+            // FIFO空，清除中断，允许接收中断
+            // DM9000_WriteReg(DM9000_ISR, ISR_PTS);
+            // dm9000_net_dev.imr_all = IMR_PAR | IMR_ROOI | IMR_POI | IMR_PTI | IMR_PRI;
+            // DM9000_WriteReg(DM9000_IMR, dm9000_net_dev.imr_all);
+            break;
+        }
+        if (rxbyte > 1)
         {
             rt_kprintf("dm9000 rx: rx error, stop device rxbyte:0x%x\r\n", rxbyte);
             DM9000_WriteReg(DM9000_RCR, 0x00);
             DM9000_WriteReg(DM9000_ISR, 0x80);
-            return (struct pbuf *)p;
+            DM9000_WriteReg(DM9000_NCR, NCR_RST);
+            _dm9000_delay_ms(5);
+            DM9000_WriteReg(DM9000_RCR, 0x39);
+            break;  // 出错直接退出
         }
-        DM9000->REG = DM9000_MRCMD;
-        rx_status = DM9000->DATA;
-        rx_length = DM9000->DATA;
+
+        DM9000->REG = DM9000_MRCMD; //__DSB();
+        rx_status = DM9000->DATA; //__DSB();
+        rx_length = DM9000->DATA; //__DSB();
+
         DM9000_DUG("rx_status:0x%x rx_length: %d\r\n", rx_status, rx_length);
-        // if(rx_length>512)rt_kprintf("rxlen:%d\r\n",rx_length);
-        p = pbuf_alloc(PBUF_RAW, rx_length, PBUF_POOL); // pbufs内存池分配pbuf
-        if (p != NULL)                                  // 内存申请成功
+
+        if ((rx_status & 0xBF00) || (rx_length < 0x40) || (rx_length > DM9000_PKT_MAX))
         {
-            for (q = p; q != NULL; q = q->next)
-            {
-                data = (u16 *)q->payload;
-                len = q->len;
-                while (len > 0)
-                {
-                    *data = DM9000->DATA;
-                    data++;
-                    len -= 2;
-                }
-            }
-        }
-        else // 内存申请失败
-        {
-            rt_kprintf("pbuf内存申请失败:%d\r\n", rx_length);
-            data = &dummy;
-            len = rx_length;
-            while (len)
-            {
-                *data = DM9000->DATA;
-                len -= 2;
-            }
-        }
-        // 根据rx_status判断接收数据是否出现如下错误：FIFO溢出、CRC错误
-        // 对齐错误、物理层错误，如果有任何一个出现的话丢弃该数据帧，
-        // 当rx_length小于64或者大于最大数据长度的时候也丢弃该数据帧
-        if ((rx_status & 0XBF00) || (rx_length < 0X40) || (rx_length > DM9000_PKT_MAX))
-        {
-            rt_kprintf("rx_status:%#x\r\n", rx_status);
-            if (rx_status & 0x100)
-                rt_kprintf("rx fifo error\r\n");
-            if (rx_status & 0x200)
-                rt_kprintf("rx crc error\r\n");
-            if (rx_status & 0x8000)
-                rt_kprintf("rx length error\r\n");
+            rt_kprintf("rx_status error:%#x\r\n", rx_status);
+            if (rx_status & 0x100) rt_kprintf("rx fifo error\r\n");
+            if (rx_status & 0x200) rt_kprintf("rx crc error\r\n");
+            if (rx_status & 0x8000) rt_kprintf("rx length error\r\n");
             if (rx_length > DM9000_PKT_MAX)
             {
                 rt_kprintf("rx length too big\r\n");
-                DM9000_WriteReg(DM9000_NCR, NCR_RST); // 复位DM9000
+                DM9000_WriteReg(DM9000_NCR, NCR_RST);
                 _dm9000_delay_ms(5);
             }
-            if (p != NULL)
-                pbuf_free((struct pbuf *)p); // 释放内存
-            p = NULL;
-            goto __error_retry;
+            // 丢弃这包数据
+            for (i = 0; i < (rx_length + 1) / 2; i++)
+            {
+                dummy = DM9000->DATA;
+                //__DSB();
+            }
+            continue;  // 继续读下一包
+        }
+
+        p = pbuf_alloc(PBUF_RAW, rx_length, PBUF_POOL);
+        if (p == NULL)
+        {
+            rt_kprintf("pbuf allocation failed:%d\r\n", rx_length);
+            // 读出数据但不存储，避免死锁
+            for (i = 0; i < (rx_length + 1) / 2; i++)
+            {
+                dummy = DM9000->DATA;
+                //__DSB();
+            }
+            continue;
+        }
+
+        for (q = p; q != NULL; q = q->next)
+        {
+            data = (u16 *)q->payload;
+            len = (q->len + 1) / 2;
+            for (i = 0; i < len; i++)
+            {
+                data[i] = DM9000->DATA;
+                //__DSB();
+            }
+        }
+
+        // 将新包加入链表尾
+        if (head == NULL)
+        {
+            head = p;
+            tail = p;
+        }
+        else
+        {
+            tail->next = p;
+            tail = p;
         }
     }
-    else
-    {
-        // DM9000_WriteReg(DM9000_ISR,ISR_PTS);			//清除所有中断标志位
-        // dm9000_net_dev.imr_all=IMR_PAR|IMR_PRI;				//重新接收中断
-        // DM9000_WriteReg(DM9000_IMR, dm9000_net_dev.imr_all);
-    }
 
-    return (struct pbuf *)p;
+    return head;
 }
+#endif
 
 int DM9000_Receive_Packet2(uint8_t *buf, int buf_size)
 {
@@ -658,6 +781,7 @@ __error_retry:
 extern void _netif_input_dat(u8 *dat, u16 len); // 定义在net_hook.h中
 #endif
 
+
 // 中断处理函数
 void DM9000_ISRHandler(void)
 {
@@ -676,8 +800,8 @@ void DM9000_ISRHandler(void)
 #ifdef DM9000_USE_LWIP
         rt_err_t result;
         result = eth_device_ready(&(dm9000_net_dev.parent));
-//        if (result != RT_EOK)
-            // rt_kprintf("RxCpltCallback err = %d", result);
+        if (result != RT_EOK)
+            rt_kprintf("RxCpltCallback err = %d", result);
 #else
 
         // **进入临界区，屏蔽所有中断**
@@ -724,10 +848,38 @@ static rt_err_t dm9000_eth_tx(rt_device_t dev, struct pbuf *p)
     return RT_EOK;
 }
 
+int debug_flag = 0;
 struct pbuf *dm9000_eth_rx(rt_device_t dev)
 {
+    struct pbuf *p = NULL;
     DM9000_DUG("dm9000_eth_rx\r\n");
-    return DM9000_Receive_Packet();
+    p = DM9000_Receive_Packet();
+
+    if(debug_flag)
+    {
+        rt_kprintf("dm9000_eth_rx\r\n");
+        if (p != NULL)
+        {
+            struct pbuf *q;
+            for (q = p; q != NULL; q = q->next)
+            {
+                rt_kprintf("pbuf len: %d\r\n", q->len);
+                // rt_kprintf("pbuf payload: ");
+                // for (int i = 0; i < q->len; i++)
+                // {
+                //     rt_kprintf("%02x ", ((u8_t *)q->payload)[i]);
+                // }
+                // rt_kprintf("\r\n");
+            }
+        }
+        else
+        {
+            rt_kprintf("No packet received\r\n");
+        }
+    }
+        
+
+    return p;
 }
 
 /** 初始化网卡 */
@@ -871,6 +1023,8 @@ static int rt_hw_dm9000_netdev_init(void)
 
     eth_device_init(&dm9000_net_dev.parent, DM900NET_NAME);
 
+    rt_kprintf("PBUF_POOL_BUFSIZE:%ld\r\n", PBUF_POOL_BUFSIZE);
+
     /* start phy monitor */
     rt_thread_t tid;
     rt_uint32_t state;
@@ -900,10 +1054,10 @@ INIT_DEVICE_EXPORT(rt_hw_dm9000_netdev_init);
 #endif
 
 /************************************* Debug *********************************************** */
-#if 0
-void dm9000(void)
+#if 1
+void dm9000_reg_show(void)
 {
-    rt_kprintf("dm9000 \n");
+    rt_kprintf("dm9000_reg_show \n");
 
     rt_kprintf("NCR   (%02X): %02x\n", DM9000_NCR,  DM9000_ReadReg(DM9000_NCR));
     rt_kprintf("NSR   (%02X): %02x\n", DM9000_NSR,  DM9000_ReadReg(DM9000_NSR));
@@ -919,9 +1073,9 @@ void dm9000(void)
     rt_kprintf("ISR   (%02X): %02x\n", DM9000_ISR,  DM9000_ReadReg(DM9000_ISR));
     rt_kprintf("IMR   (%02X): %02x\n", DM9000_IMR,  DM9000_ReadReg(DM9000_IMR));
     rt_kprintf("ID : %04x\n", DM9000_Get_DeiviceID);
-    rt_kprintf("dm9000 end\n");
+    rt_kprintf("dm9000_reg_show end\n");
 }
-MSH_CMD_EXPORT(dm9000, "dm9000 register dump");
+MSH_CMD_EXPORT(dm9000_reg_show, "dm9000 register dump");
 
 void dm9000_w_data(void)
 {
@@ -970,58 +1124,6 @@ void dm9000_dump(void)
 }
 MSH_CMD_EXPORT(dm9000_dump, "dm9000_dump");
 
-static void check_dm9000_phy_status(void)
-{
-#ifdef USE_ATK
-    rt_uint16_t bmsr = DM9000_PHY_ReadReg(DM9000_PHY_BMSR);
-    rt_uint16_t bmcr = DM9000_PHY_ReadReg(DM9000_PHY_BMCR);
-    rt_uint16_t anar = DM9000_PHY_ReadReg(DM9000_PHY_ANAR);
-    rt_uint16_t anlpar = DM9000_PHY_ReadReg(DM9000_PHY_ANLPAR);
-    rt_uint16_t dscr = DM9000_PHY_ReadReg(DM9000_PHY_DSCR);
-
-    for(int i=0; i<0x14; i++)
-    {
-        rt_kprintf("PHY REG[%02X]: %04x\r\n", i, DM9000_PHY_ReadReg(i));
-    }
-#else
-    rt_uint16_t bmsr = dm9k_phy_read(DM9000_PHY_BMSR);
-    rt_uint16_t bmcr = dm9k_phy_read(DM9000_PHY_BMCR);
-    rt_uint16_t anar = dm9k_phy_read(DM9000_PHY_ANAR);
-    rt_uint16_t anlpar = dm9k_phy_read(DM9000_PHY_ANLPAR);
-    rt_uint16_t dscr = dm9k_phy_read(DM9000_PHY_DSCR);
-#endif
-
-    rt_kprintf("DM9000 PHY Status:\n");
-    rt_kprintf("  BMCR  (0x00) = 0x%04X\n", bmcr);
-    rt_kprintf("  BMSR  (0x01) = 0x%04X\n", bmsr);
-    rt_kprintf("  ANAR  (0x04) = 0x%04X\n", anar);
-    rt_kprintf("  ANLPAR(0x05) = 0x%04X\n", anlpar);
-    rt_kprintf("  DSCR  (0x16) = 0x%04X\n", dscr);
-
-    if (bmsr & 0x0004)
-        rt_kprintf("  PHY Link: UP\n");
-    else
-        rt_kprintf("  PHY Link: DOWN\n");
-
-    if (bmcr & 0x1000)
-        rt_kprintf("  Auto-Negotiation: Enabled\n");
-    else
-        rt_kprintf("  Auto-Negotiation: Disabled\n");
-
-    if (bmcr & 0x0100)
-        rt_kprintf("  Speed: 100Mbps\n");
-    else
-        rt_kprintf("  Speed: 10Mbps\n");
-
-    if (bmcr & 0x0200)
-        rt_kprintf("  Duplex: Full Duplex\n");
-    else
-        rt_kprintf("  Duplex: Half Duplex\n");
-}
-
-// 在 MSH 里调用命令
-MSH_CMD_EXPORT(check_dm9000_phy_status, "Check DM9000 PHY status");
-
 
 void dm9000_test(void)
 {
@@ -1036,6 +1138,19 @@ void dm9000_test(void)
 
 }
 MSH_CMD_EXPORT(dm9000_test, "dm9000_test");
+
+void dm9000_debug(int argc, char **argv)
+{
+    if(argc != 2)
+    {
+        rt_kprintf("Usage: dm9000_debug 0|1\r\n");
+        return;
+    }
+
+    debug_flag = atoi(argv[1]);
+    rt_kprintf("dm9000_debug set to %d\r\n", debug_flag);
+}
+MSH_CMD_EXPORT(dm9000_debug, "dm9000_debug");
 
 #endif
 

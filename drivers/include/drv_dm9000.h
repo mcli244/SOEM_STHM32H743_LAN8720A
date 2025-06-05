@@ -31,8 +31,8 @@ enum DM9000_PHY_mode
 //DM9000地址结构体
 typedef struct
 {
-    vu32 REG;
-    vu32 DATA;
+    vu16 REG;
+    vu16 DATA;
 }DM9000_TypeDef;
 //使用NOR/SRAM的 Bank1.sector2,地址位HADDR[27,26]=01 A7作为数据命令区分线
 //注意设置时STM32内部会右移一位对其!
