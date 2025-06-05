@@ -46,20 +46,22 @@ int motor_get(motor_pos_t *pos);
 int motor_deinit(void);
 
 
-/** EtherCAT 退出OP模式，转为安全操作模式。 
+/** EtherCAT CSP模式暂停
  *     
  * @return                = 0 on success, negative value on failure.
  * @note 
- *    退出后才可以读写SDO
+ *    暂停后才可以读写SDO
  */
-int motor_ec_exit_op(void);
+int motor_ec_csp_pause(void);
 
 
-/** EtherCAT 进入OP模式，开始发送周期PDO数据。
+/** EtherCAT 继续CSP模式
  *         
  * @return                = 0 on success, negative value on failure.
+ * @note
+ *    继续CSP模式后，将会检测电机是否存在故障，如果有故障且能清除，将执行清除故障操作
  */
-int motor_ec_enter_op(void);
+int motor_ec_csp_continue(void);
 
 /** EtherCAT SDO写操作
  *
