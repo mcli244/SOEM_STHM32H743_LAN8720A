@@ -147,10 +147,10 @@ int tcp_server_test(void)
 }
 MSH_CMD_EXPORT(tcp_server_test, TCP server test);
 
-extern int dm_irq_cnt;
+extern int dm_irq_cnt, dm_pkg_max;
 int tcp_server_show(void)
 {
-    rt_kprintf("TCP server test running, received %d messages. dm_irq_cnt:%d\n", cnt, dm_irq_cnt);
+    rt_kprintf("TCP server test running, received %d messages. dm_irq_cnt:%d dm_pkg_max:%d\n", cnt, dm_irq_cnt, dm_pkg_max);
     return 0;
 }
 MSH_CMD_EXPORT(tcp_server_show, TCP server test);

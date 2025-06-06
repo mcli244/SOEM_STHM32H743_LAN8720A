@@ -553,7 +553,7 @@ static rt_err_t stm32_pin_irq_enable(struct rt_device *device, rt_base_t pin,
         }
         HAL_GPIO_Init(index->gpio, &GPIO_InitStruct);
 
-        HAL_NVIC_SetPriority(irqmap->irqno, 5, 0);
+        HAL_NVIC_SetPriority(irqmap->irqno, 0, 0);
         HAL_NVIC_EnableIRQ(irqmap->irqno);
         pin_irq_enable_mask |= irqmap->pinbit;
 

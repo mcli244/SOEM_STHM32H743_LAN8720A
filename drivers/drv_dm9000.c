@@ -48,6 +48,7 @@ static struct dm9000_net_eth dm9000_net_dev =
 };
 
 int dm_irq_cnt = 0;
+int dm_pkg_max = 0;
 /***************** netdev end**********************/
 
 #ifndef DM9000_USE_LWIP
@@ -435,7 +436,7 @@ int DM9000_Init(void)
     // 设置MAC地址和组播地址
     DM9000_Set_MACAddress(dm9000_net_dev.mac_addr);      // 设置MAC地址
     DM9000_Set_Multicast(dm9000_net_dev.multicase_addr); // 设置组播地址
-    DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_RXEN);
+    DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN);  // 丢弃长度超过1522B的帧 丢弃CRC错误的帧
     // DM9000_WriteReg(DM9000_RCR, 0x3B);  // 开启 promiscuous 接收所有包
     // DM9000_WriteReg(DM9000_RCR, 0x1F); // 启用所有接收模式，包括广播、接收长度较小的数据包等
 
@@ -611,13 +612,14 @@ struct pbuf *DM9000_Receive_Packet(void)
     u16 *data;
     u16 dummy;
     int len, i;
+    int pkg_cnt = 0;
 
     DM9000_DUG("DM9000_Receive_Packets\r\n");
 
     while (1)
     {
-        DM9000_ReadReg(DM9000_MRRH);
-        DM9000_ReadReg(DM9000_MRRL);
+        // DM9000_ReadReg(DM9000_MRRH);
+        // DM9000_ReadReg(DM9000_MRRL);
         DM9000_ReadReg(DM9000_MRCMDX);  // 假读
         rxbyte = (u8)DM9000->DATA;
         //__DSB();
@@ -636,8 +638,9 @@ struct pbuf *DM9000_Receive_Packet(void)
             DM9000_WriteReg(DM9000_RCR, 0x00);
             DM9000_WriteReg(DM9000_ISR, 0x80);
             DM9000_WriteReg(DM9000_NCR, NCR_RST);
-            _dm9000_delay_ms(5);
-            DM9000_WriteReg(DM9000_RCR, 0x39);
+            // _dm9000_delay_ms(5);
+            rt_thread_delay(5);
+            DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN); 
             break;  // 出错直接退出
         }
 
@@ -657,7 +660,8 @@ struct pbuf *DM9000_Receive_Packet(void)
             {
                 rt_kprintf("rx length too big\r\n");
                 DM9000_WriteReg(DM9000_NCR, NCR_RST);
-                _dm9000_delay_ms(5);
+                // _dm9000_delay_ms(5);
+                rt_thread_delay(5);
             }
             // 丢弃这包数据
             for (i = 0; i < (rx_length + 1) / 2; i++)
@@ -690,7 +694,11 @@ struct pbuf *DM9000_Receive_Packet(void)
                 data[i] = DM9000->DATA;
                 //__DSB();
             }
+            q->len -= 4;    // 去掉4字节的CRC
         }
+        pkg_cnt ++;
+        if(dm_pkg_max < pkg_cnt)
+            dm_pkg_max = pkg_cnt;
 
         // 将新包加入链表尾
         if (head == NULL)
@@ -799,6 +807,7 @@ void DM9000_ISRHandler(void)
 // DM9000_DUG("ISR_PRS\r\n");
 #ifdef DM9000_USE_LWIP
         rt_err_t result;
+        dm_irq_cnt ++;
         result = eth_device_ready(&(dm9000_net_dev.parent));
         if (result != RT_EOK)
             rt_kprintf("RxCpltCallback err = %d", result);
