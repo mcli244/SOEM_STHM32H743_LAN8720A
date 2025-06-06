@@ -39,12 +39,14 @@ struct dm9000_net_eth
     u8 mac_addr[6];            // MAC地址
     u8 multicase_addr[8];      // 组播地址
     rt_timer_t poll_link_timer;
+    u8 rt_thread_is_running;
 };
 static struct dm9000_net_eth dm9000_net_dev =
     {
         .mac_addr = {0x00, 0x80, 0xE1, 0x00, 0x00, 0x00},
         .multicase_addr = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
         .mode = DM9000_100MFD,
+        .rt_thread_is_running = 0,
 };
 
 int dm_irq_cnt = 0;
@@ -61,17 +63,22 @@ static uint8_t rxbuf[1540];
 void irq_callback(void *args);
 static void _dm9000_delay_ms(u16 nms)
 {
-    /**  tips:
-     * 这里主频480MHz rt_hw_us_delay() 大于1000就会卡死
-     * 这里把它限制在500us，大于的部分就拆分
-     * **/
-    rt_uint32_t us = nms * 1000;
-    while (us > 500)
+    if(dm9000_net_dev.rt_thread_is_running)
+        rt_thread_delay(nms);
+    else
     {
-        rt_hw_us_delay(500);
-        us -= 500;
+        /**  tips:
+         * 这里主频480MHz rt_hw_us_delay() 大于1000就会卡死
+         * 这里把它限制在500us，大于的部分就拆分
+         * **/
+        rt_uint32_t us = nms * 1000;
+        while (us > 500)
+        {
+            rt_hw_us_delay(500);
+            us -= 500;
+        }
+        rt_hw_us_delay(us);
     }
-    rt_hw_us_delay(us);
 }
 
 static uint32_t FMC_Initialized = 0;
@@ -366,14 +373,19 @@ void DM9000_Set_Multicast(u8 *multicastaddr)
 // 复位DM9000
 void DM9000_Reset(void)
 {
+    static int first_in = 0;
     // 复位DM9000,复位步骤参考<DM9000 Application Notes V1.22>手册29页
     int cnt = 0;
-    rt_pin_mode(PIN_NRESET, PIN_MODE_OUTPUT);
-    rt_pin_write(PIN_NRESET, PIN_LOW);
-    _dm9000_delay_ms(10);
-    rt_pin_write(PIN_NRESET, PIN_HIGH);
-    _dm9000_delay_ms(100);
 
+    if(first_in)
+    {
+        rt_pin_mode(PIN_NRESET, PIN_MODE_OUTPUT);
+        rt_pin_write(PIN_NRESET, PIN_LOW);
+        _dm9000_delay_ms(10);
+        rt_pin_write(PIN_NRESET, PIN_HIGH);
+        _dm9000_delay_ms(100);
+    }
+    
     DM9000_WriteReg(DM9000_GPCR, 0x01);            // 第一步:设置GPCR寄存器(0X1E)的bit0为1
     DM9000_WriteReg(DM9000_GPR, DM9000_PHY_ON);    // 第二步:设置GPR寄存器(0X1F)的bit1为0，DM9000内部的PHY上电
     DM9000_WriteReg(DM9000_NCR, (0x02 | NCR_RST)); // 第三步:软件复位DM9000
@@ -635,12 +647,13 @@ struct pbuf *DM9000_Receive_Packet(void)
         if (rxbyte > 1)
         {
             rt_kprintf("dm9000 rx: rx error, stop device rxbyte:0x%x\r\n", rxbyte);
-            DM9000_WriteReg(DM9000_RCR, 0x00);
-            DM9000_WriteReg(DM9000_ISR, 0x80);
-            DM9000_WriteReg(DM9000_NCR, NCR_RST);
+            // DM9000_WriteReg(DM9000_RCR, 0x00);
+            // DM9000_WriteReg(DM9000_ISR, 0x80);
+            // DM9000_WriteReg(DM9000_NCR, NCR_RST);
             // _dm9000_delay_ms(5);
-            rt_thread_delay(5);
-            DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN); 
+            
+            // DM9000_WriteReg(DM9000_RCR,RCR_DIS_LONG|RCR_DIS_CRC|RCR_RXEN); 
+            DM9000_Reset();
             break;  // 出错直接退出
         }
 
@@ -660,8 +673,7 @@ struct pbuf *DM9000_Receive_Packet(void)
             {
                 rt_kprintf("rx length too big\r\n");
                 DM9000_WriteReg(DM9000_NCR, NCR_RST);
-                // _dm9000_delay_ms(5);
-                rt_thread_delay(5);
+                _dm9000_delay_ms(5);
             }
             // 丢弃这包数据
             for (i = 0; i < (rx_length + 1) / 2; i++)
@@ -968,6 +980,11 @@ static void phy_linkchange()
             phy_speed = temp;
             DM9000_DUG("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
             eth_device_linkchange(&dm9000_net_dev.parent, RT_TRUE);
+            if((rt_thread_find("main") != RT_NULL) && (dm9000_net_dev.rt_thread_is_running == 0))
+            {
+                dm9000_net_dev.rt_thread_is_running = 1;
+                rt_kprintf("rt_thread_is_running\r\n");
+            }
         }
         else
         {
@@ -985,6 +1002,7 @@ static void phy_linkchange()
 
 static void phy_monitor_thread_entry(void *parameter)
 {
+
     phy_linkchange();
 #ifdef PHY_USING_INTERRUPT_MODE
     /* configuration intterrupt pin */
