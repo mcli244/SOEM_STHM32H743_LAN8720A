@@ -57,6 +57,7 @@ struct rt_dm9000_eth
 
     /* interface address info. */
     rt_uint8_t  dev_addr[MAX_ADDR_LEN];     /* hw address   */
+    rt_uint8_t  init_complete;           /* init complete flag */
 };
 
 static struct rt_dm9000_eth dm9000_device;
@@ -193,7 +194,7 @@ rt_inline void dm9000_phy_mode_set(rt_uint8_t mode)
 }
 
 /* interrupt service routine */
-void rt_dm9000_isr(void)
+void rt_dm9000_isr(void *arg)
 {
     rt_uint16_t int_status;
     rt_uint16_t last_io;
@@ -377,6 +378,7 @@ static rt_err_t rt_dm9000_init(rt_device_t dev)
     dm9000_io_write(DM9000_IMR, IMR_PAR | IMR_PTM | IMR_PRM | ISR_ROS | ISR_ROOS);
 
     LOG_I("Driver dm9000 init / end");
+    dm9000_device.init_complete = 1;
     return RT_EOK;
 }
 
@@ -876,7 +878,7 @@ static void phy_linkchange()
         if(phy_speed != temp) // 如果连接状态发生变化
         {
             phy_speed = temp;
-            LOG_D("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
+            LOG_D("DM9000 Speed:%dMbps,Duplex:%s duplex mode", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
             eth_device_linkchange(&dm9000_device.parent, RT_TRUE);
         }
         else
@@ -886,7 +888,7 @@ static void phy_linkchange()
     }
     else
     {
-        LOG_D("link down\r\n");
+        LOG_D("link down");
         phy_speed = 0;
         eth_device_linkchange(&dm9000_device.parent, RT_FALSE);
     }
@@ -894,10 +896,11 @@ static void phy_linkchange()
 
 void phy_state_check(void *arg)
 {
-    LOG_D("phy_state_check started\n");
+    LOG_D("phy_state_check started");
     while(1)
     {
-        phy_linkchange(); // 检测PHY状态
+        if (dm9000_device.init_complete == 1) 
+            phy_linkchange();
         rt_thread_mdelay(1000); // 每隔1秒检测一次PHY状态
     }
 }
