@@ -64,7 +64,7 @@ static struct rt_semaphore sem_ack, sem_lock;
 int dm_irq_cnt, dm_pkg_max;
 
 // 这个一定要放在全局作用域下
-static SRAM_HandleTypeDef DM9000_Handler;           //DM9000句柄
+//static SRAM_HandleTypeDef DM9000_Handler;           //DM9000句柄
 
 /* --- */
 
@@ -197,7 +197,7 @@ void rt_dm9000_isr(void)
 {
     rt_uint16_t int_status;
     rt_uint16_t last_io;
-    rt_uint32_t eint_pend;
+//    rt_uint32_t eint_pend;
 
     last_io = DM9000_IO;
 
@@ -354,26 +354,24 @@ static rt_err_t rt_dm9000_init(rt_device_t dev)
 
     /* see what we've got */
     lnk = dm9000_phy_read(17) >> 12;
-    rt_kprintf("operating at ");
     switch (lnk)
     {
     case 1:
-        rt_kprintf("10M half duplex ");
+        LOG_I("10M half duplex ");
         break;
     case 2:
-        rt_kprintf("10M full duplex ");
+        LOG_I("10M full duplex ");
         break;
     case 4:
-        rt_kprintf("100M half duplex ");
+        LOG_I("100M half duplex ");
         break;
     case 8:
-        rt_kprintf("100M full duplex ");
+        LOG_I("100M full duplex ");
         break;
     default:
-        rt_kprintf("unknown: %d ", lnk);
+        LOG_I("unknown: %d ", lnk);
         break;
     }
-    rt_kprintf("mode\n");
 
     /* Enable TX/RX interrupt mask */
     dm9000_io_write(DM9000_IMR, IMR_PAR | IMR_PTM | IMR_PRM | ISR_ROS | ISR_ROOS);
@@ -601,7 +599,7 @@ struct pbuf *rt_dm9000_rx(rt_device_t dev)
             // RT_ASSERT(p->type == PBUF_RAM); /* set PBUF_RAM above */
             // if (p->type == PBUF_RAM) {
                 /* p is one large chunk */
-                int i;
+//                int i;
 
                 RT_ASSERT(p->next == RT_NULL);
                 RT_ASSERT(p->len == p->tot_len);
@@ -659,8 +657,6 @@ struct pbuf *rt_dm9000_rx(rt_device_t dev)
             /* len == 1, if remaining 1 byte not read */
             if (len == 1)
             {
-                rt_uint8_t dummy_u8;
-
                 // dummy_u8 = DM9000_inb(DM9000_DATA_BASE); /* dummy read 1 byte */
                 dummy_u8 = DM9000_DATA;
             }
@@ -814,10 +810,10 @@ void DM9000_FMC_Config(void)
 
     // 使用的HCLK 120M = 8.3ns
     /* Timing */
-    Timing.AddressSetupTime         = 15;       // DM9000手册建议地址建立时间为大于80ns F0寄存器
+    Timing.AddressSetupTime         = 10;       // DM9000手册建议地址建立时间为大于80ns F0寄存器
     Timing.AddressHoldTime          = 0;        // 模式A没用上
-    Timing.DataSetupTime            = 8;        // DM9000手册建议数据建立时间为大于10ns  
-    Timing.BusTurnAroundDuration    = 8;        // 片选信号，高脉宽
+    Timing.DataSetupTime            = 2;        // DM9000手册建议数据建立时间为大于10ns  
+    Timing.BusTurnAroundDuration    = 2;        // 片选信号，高脉宽
     Timing.CLKDivision              = 0;        // 模式A没用上
     Timing.DataLatency              = 0;        // 模式A没用上
     Timing.AccessMode               = FMC_ACCESS_MODE_A;
@@ -832,6 +828,78 @@ void DM9000_FMC_Config(void)
     rt_pin_attach_irq(PIN_IRQ, PIN_IRQ_MODE_FALLING, rt_dm9000_isr, RT_NULL);
     rt_pin_irq_enable(PIN_IRQ, PIN_IRQ_ENABLE);
     /* USER CODE END FMC_Init 2 */
+}
+
+// 获取DM9000的连接速度和双工模式
+// 返回值：  0,100M半双工
+//           1,100M全双工
+//           2,10M半双工
+//           3,10M全双工
+//           0XFF,连接失败！
+u8 DM9000_Get_SpeedAndDuplex(void)
+{
+    u8 temp;
+    u8 i = 0;
+    if (dm9000_device.mode == DM9000_AUTO) // 如果开启了自动协商模式一定要等待协商完成
+    {
+        while (!(dm9000_phy_read (0X01) & 0X0020)) // 等待自动协商完成
+        {
+            dm9000_delay_ms(10);
+            i++;
+            if (i > 100)
+                return 0XFF; // 自动协商失败
+        }
+    }
+    else // 自定义模式,一定要等待连接成功
+    {
+        while (!(dm9000_io_read(DM9000_NSR) & 0X40)) // 等待连接成功
+        {
+            dm9000_delay_ms(10);
+            i++;
+            if (i > 100)
+                return 0XFF; // 连接失败
+        }
+    }
+    temp = ((dm9000_io_read(DM9000_NSR) >> 6) & 0X02);  // 获取DM9000的连接速度
+    temp |= ((dm9000_io_read(DM9000_NCR) >> 3) & 0X01); // 获取DM9000的双工状态
+    return temp;
+}
+
+static void phy_linkchange()
+{
+    static rt_uint8_t phy_speed = 0;
+    rt_uint8_t temp;
+
+    temp = DM9000_Get_SpeedAndDuplex(); // 获取DM9000的连接速度和双工状态
+    if (temp != 0XFF)                   // 连接成功，通过串口显示连接速度和双工状态
+    {
+        if(phy_speed != temp) // 如果连接状态发生变化
+        {
+            phy_speed = temp;
+            LOG_D("DM9000 Speed:%dMbps,Duplex:%s duplex mode\r\n", (temp & 0x02) ? 10 : 100, (temp & 0x01) ? "Full" : "Half");
+            eth_device_linkchange(&dm9000_device.parent, RT_TRUE);
+        }
+        else
+        {
+            return; // 没有变化，直接返回
+        }
+    }
+    else
+    {
+        LOG_D("link down\r\n");
+        phy_speed = 0;
+        eth_device_linkchange(&dm9000_device.parent, RT_FALSE);
+    }
+}
+
+void phy_state_check(void *arg)
+{
+    LOG_D("phy_state_check started\n");
+    while(1)
+    {
+        phy_linkchange(); // 检测PHY状态
+        rt_thread_mdelay(1000); // 每隔1秒检测一次PHY状态
+    }
 }
 
 int rt_hw_dm9000_init(void) {
@@ -873,8 +941,10 @@ int rt_hw_dm9000_init(void) {
     dm9000_device.parent.eth_tx  = rt_dm9000_tx;
     
     eth_device_init(&(dm9000_device.parent), "e0");
-    eth_device_linkchange(&(dm9000_device.parent), RT_TRUE);
 
+    rt_thread_t tid;
+    tid = rt_thread_create("phy", phy_state_check, RT_NULL, 512, RT_THREAD_PRIORITY_MAX - 2, 2);
+    rt_thread_startup(tid);
 
     return RT_EOK;
 }
