@@ -915,12 +915,14 @@ MSH_CMD_EXPORT(motor_deinit, "motor_deinit");
 int motor_ec_SDOwrite(uint16 Slave, uint16 Index, uint8 SubIndex,
                       boolean CA, int psize, void *p, int Timeout)
 {
+  #if 0
   motor_state_t sta = ecat_motor_state_get();
   if (sta != ECAT_MOTOR_CSP_PAUSED)
   {
     rt_kprintf("motor_ec_SDOwrite: The SDO operation is disabled in current state: %d\r\n", sta);
     return -1;
   }
+  #endif
 
   int wkc = ec_SDOwrite(Slave, Index, SubIndex, CA, psize, p, Timeout);
   if(wkc <= 0)
@@ -935,12 +937,14 @@ int motor_ec_SDOwrite(uint16 Slave, uint16 Index, uint8 SubIndex,
 int motor_ec_SDOread(uint16 Slave, uint16 Index, uint8 SubIndex,
                      boolean CA, int *psize, void *p, int Timeout)
 {
+  #if 0
   motor_state_t sta = ecat_motor_state_get();
   if (sta != ECAT_MOTOR_CSP_PAUSED)
   {
     rt_kprintf("motor_ec_SDOwrite: The SDO operation is disabled in current state: %d\r\n", sta);
     return -1;
   }
+  #endif
 
   int wkc = ec_SDOread(Slave, Index, SubIndex, CA, psize, p, Timeout);
   if(wkc <= 0)
