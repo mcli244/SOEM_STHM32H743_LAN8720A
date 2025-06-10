@@ -1,173 +1,200 @@
-#ifndef _DM9000AEP_H
-#define _DM9000AEP_H
+#ifndef __DRV_DM9000_H__
+#define __DRV_DM9000_H__
 
-#include "main.h"
-#include <inttypes.h>
-#include "lwip/pbuf.h"
+// #define DM9000_IO_BASE      0x64000000  
+// // #define DM9000_DATA_BASE    0x64000100  // FSMC_A7 -- CMD = 1
+// #define DM9000_DATA_BASE    (0x64000000 + 0x00000002)  // FSMC_A7 -- CMD = 1
 
-typedef __IO uint32_t  vu32;
-typedef __IO uint16_t vu16;
-typedef __IO uint8_t  vu8;
+// #define DM9000_IO 			(*((volatile rt_uint16_t *) DM9000_IO_BASE))    // CMD = 0
+// #define DM9000_DATA 		(*((volatile rt_uint16_t *) DM9000_DATA_BASE))  // CMD = 1
 
-typedef uint32_t  u32;
-typedef uint16_t u16;
-typedef uint8_t  u8;
+ #include "main.h"
+ typedef __IO uint32_t  vu32;
+ typedef __IO uint16_t vu16;
+ typedef __IO uint8_t  vu8;
 
-//DM9000工作模式定义
-enum DM9000_PHY_mode
-{
-    DM9000_10MHD    =   0,                  //10M半双工
-    DM9000_100MHD   =   1,                  //100M半双工
-    DM9000_10MFD    =   4,                  //10M全双工
-    DM9000_100MFD   =   5,                  //100M全双工
-    DM9000_AUTO     =   8,                  //自动协商
-};
-
-#define DM9000_USE_LWIP    // 将DM9000对接到LWIP
-
-#define DM9000_RST      PDout(7)        //DM9000复位引脚
-#define DM9000_INT      PGin(6)         //DM9000中断引脚
-
+ typedef uint32_t  u32;
+ typedef uint16_t u16;
+ typedef uint8_t  u8;
 //DM9000地址结构体
 typedef struct
 {
     vu16 REG;
     vu16 DATA;
 }DM9000_TypeDef;
-//使用NOR/SRAM的 Bank1.sector2,地址位HADDR[27,26]=01 A7作为数据命令区分线
-//注意设置时STM32内部会右移一位对其!
-//#define DM9000_BASE        ((u32)(0x60000000|0x000000FE))
 #define DM9000_BASE        ((u32)(0x60000000))
 #define DM9000             ((DM9000_TypeDef *) DM9000_BASE)
 
-#define DM9000_ID           0X90000A46  //DM9000 ID
-#define DM9000_PKT_MAX      1536        //DM9000最大接收包长度
+#define DM9000_IO_BASE      (DM9000->REG)  
+#define DM9000_DATA_BASE    (DM9000->DATA)  // FSMC_A0 -- CMD = 1
+#define DM9000_IO 			(DM9000->REG)    // CMD = 0
+#define DM9000_DATA 		(DM9000->DATA)  // CMD = 1
 
-#define DM9000_PHY          0X40        //DM9000 PHY寄存器访问标志
-//DM9000寄存器
-#define DM9000_NCR          0X00
-#define DM9000_NSR          0X01
-#define DM9000_TCR          0X02
-#define DM9000_TSRI         0X03
-#define DM9000_TSRII        0X04
-#define DM9000_RCR          0X05
-#define DM9000_RSR          0X06
-#define DM9000_ROCR         0X07
-#define DM9000_BPTR         0X08
-#define DM9000_FCTR         0X09
-#define DM9000_FCR          0X0A
-#define DM9000_EPCR         0X0B
-#define DM9000_EPAR         0X0C
-#define DM9000_EPDRL        0X0D
-#define DM9000_EPDRH        0X0E
-#define DM9000_WCR          0X0F
-#define DM9000_PAR          0X10        //物理地址0X10~0X15
-#define DM9000_MAR          0X16        //多播地址0X16~0X1D
-#define DM9000_GPCR         0X1E
-#define DM9000_GPR          0X1F
-#define DM9000_TRPAL        0X22
-#define DM9000_TRPAH        0X23
-#define DM9000_RWPAL        0X24
-#define DM9000_RWPAH        0X25
+// #define DM9000_IO_BASE      0x64000000  
+// #define DM9000_DATA_BASE    (0x64000000 + 0x2)  // FSMC_A0 -- CMD = 1
 
-#define DM9000_VIDL         0X28
-#define DM9000_VIDH         0X29
-#define DM9000_PIDL         0X2A
-#define DM9000_PIDH         0X2B
+// #define DM9000_IO 			(*((volatile rt_uint16_t *) DM9000_IO_BASE))    // CMD = 0
+// #define DM9000_DATA 		(*((volatile rt_uint16_t *) DM9000_DATA_BASE))  // CMD = 1
 
-#define DM9000_CHIPR        0X2C
-#define DM9000_TCR2         0X2D
-#define DM9000_OCR          0X2E
-#define DM9000_SMCR         0X2F
-#define DM9000_ETXCSR       0X30
-#define DM9000_TCSCR        0X31
-#define DM9000_RCSCSR       0X32
-#define DM9000_MRCMDX       0XF0
-#define DM9000_MRCMDX1      0XF1
-#define DM9000_MRCMD        0XF2
-#define DM9000_MRRL         0XF4
-#define DM9000_MRRH         0XF5
-#define DM9000_MWCMDX       0XF6
-#define DM9000_MWCMD        0XF8
-#define DM9000_MWRL         0XFA
-#define DM9000_MWRH         0XFB
-#define DM9000_TXPLL        0XFC
-#define DM9000_TXPLH        0XFD
-#define DM9000_ISR          0XFE
-#define DM9000_IMR          0XFF
 
-#define NCR_RST             0X01
-#define NSR_SPEED           0X80
-#define NSR_LINKST          0X40
-#define NSR_WAKEST          0X20
-#define NSR_TX2END          0X08
-#define NSR_TX1END          0X04
-#define NSR_RXOV            0X02
+// #define DM9000_inb(r) 		(*(volatile rt_uint8_t  *)r)
+// #define DM9000_outb(r, d) 	(*(volatile rt_uint8_t  *)r = d)
+// #define DM9000_inw(r) 		(*(volatile rt_uint16_t *)r)
+// #define DM9000_outw(r, d) 	(*(volatile rt_uint16_t *)r = d)
 
-#define RCR_DIS_LONG        0X20
-#define RCR_DIS_CRC         0X10
-#define RCR_ALL             0X08
-#define RCR_RXEN            0X01
+#define DM9000_ID		    0x90000A46  /* DM9000 ID */
+#define DM9000_PKT_MAX		1536	    /* Received packet max size */
+#define DM9000_PKT_RDY		0x01	    /* Packet ready to receive */
 
-#define IMR_PAR             0X80
-#define IMR_ROOI            0X08
-#define IMR_POI             0X04        //使能接收溢出中断
-#define IMR_PTI             0X02        //使能发送中断
-#define IMR_PRI             0X01        //使能接收中断
+#define DM9000_NCR          0x00
+#define DM9000_NSR          0x01
+#define DM9000_TCR          0x02
+#define DM9000_TSR1         0x03
+#define DM9000_TSR2         0x04
+#define DM9000_RCR          0x05
+#define DM9000_RSR          0x06
+#define DM9000_ROCR         0x07
+#define DM9000_BPTR         0x08
+#define DM9000_FCTR         0x09
+#define DM9000_FCR          0x0A
+#define DM9000_EPCR         0x0B
+#define DM9000_EPAR         0x0C
+#define DM9000_EPDRL        0x0D
+#define DM9000_EPDRH        0x0E
+#define DM9000_WCR          0x0F
 
-#define ISR_LNKCHGS         (1<<5)
+#define DM9000_PAR          0x10
+#define DM9000_MAR          0x16
+
+#define DM9000_GPCR         0x1e
+#define DM9000_GPR          0x1f
+#define DM9000_TRPAL        0x22
+#define DM9000_TRPAH        0x23
+#define DM9000_RWPAL        0x24
+#define DM9000_RWPAH        0x25
+
+#define DM9000_VIDL         0x28
+#define DM9000_VIDH         0x29
+#define DM9000_PIDL         0x2A
+#define DM9000_PIDH         0x2B
+
+#define DM9000_CHIPR        0x2C
+#define DM9000_TCR2			0x2D
+#define DM9000_OTCR			0x2E
+#define DM9000_SMCR         0x2F
+
+#define DM9000_ETCR			0x30	/* early transmit control/status register */
+#define DM9000_CSCR			0x31	/* check sum control register */
+#define DM9000_RCSSR		0x32	/* receive check sum status register */
+
+#define DM9000_MRCMDX       0xF0
+#define DM9000_MRCMD        0xF2
+#define DM9000_MRRL         0xF4
+#define DM9000_MRRH         0xF5
+#define DM9000_MWCMDX       0xF6
+#define DM9000_MWCMD        0xF8
+#define DM9000_MWRL         0xFA
+#define DM9000_MWRH         0xFB
+#define DM9000_TXPLL        0xFC
+#define DM9000_TXPLH        0xFD
+#define DM9000_ISR          0xFE
+#define DM9000_IMR          0xFF
+
+#define CHIPR_DM9000A       0x19
+#define CHIPR_DM9000B       0x1B
+
+#define NCR_EXT_PHY         (1<<7)
+#define NCR_WAKEEN          (1<<6)
+#define NCR_FCOL            (1<<4)
+#define NCR_FDX             (1<<3)
+#define NCR_LBK             (3<<1)
+#define NCR_RST             (1<<0)
+
+#define NSR_SPEED           (1<<7)
+#define NSR_LINKST          (1<<6)
+#define NSR_WAKEST          (1<<5)
+#define NSR_TX2END          (1<<3)
+#define NSR_TX1END          (1<<2)
+#define NSR_RXOV            (1<<1)
+
+#define TCR_TJDIS           (1<<6)
+#define TCR_EXCECM          (1<<5)
+#define TCR_PAD_DIS2        (1<<4)
+#define TCR_CRC_DIS2        (1<<3)
+#define TCR_PAD_DIS1        (1<<2)
+#define TCR_CRC_DIS1        (1<<1)
+#define TCR_TXREQ           (1<<0)
+
+#define TSR_TJTO            (1<<7)
+#define TSR_LC              (1<<6)
+#define TSR_NC              (1<<5)
+#define TSR_LCOL            (1<<4)
+#define TSR_COL             (1<<3)
+#define TSR_EC              (1<<2)
+
+#define RCR_WTDIS           (1<<6)
+#define RCR_DIS_LONG        (1<<5)
+#define RCR_DIS_CRC         (1<<4)
+#define RCR_ALL             (1<<3)
+#define RCR_RUNT            (1<<2)
+#define RCR_PRMSC           (1<<1)
+#define RCR_RXEN            (1<<0)
+
+#define RSR_RF              (1<<7)
+#define RSR_MF              (1<<6)
+#define RSR_LCS             (1<<5)
+#define RSR_RWTO            (1<<4)
+#define RSR_PLE             (1<<3)
+#define RSR_AE              (1<<2)
+#define RSR_CE              (1<<1)
+#define RSR_FOE             (1<<0)
+
+#define FCTR_HWOT(ot)       (( ot & 0xf ) << 4 )
+#define FCTR_LWOT(ot)       ( ot & 0xf )
+
+#define IMR_PAR             (1<<7)
+#define IMR_ROOM            (1<<3)
+#define IMR_ROM             (1<<2)
+#define IMR_PTM             (1<<1)
+#define IMR_PRM             (1<<0)
+
 #define ISR_ROOS            (1<<3)
 #define ISR_ROS             (1<<2)
 #define ISR_PTS             (1<<1)
 #define ISR_PRS             (1<<0)
 #define ISR_CLR_STATUS      (ISR_ROOS | ISR_ROS | ISR_PTS | ISR_PRS)
 
-//DM9000内部PHY寄存器
-#define DM9000_PHY_BMCR     0X00
-#define DM9000_PHY_BMSR     0X01
-#define DM9000_PHY_PHYID1   0X02
-#define DM9000_PHY_PHYID2   0X03
-#define DM9000_PHY_ANAR     0X04
-#define DM9000_PHY_ANLPAR   0X05
-#define DM9000_PHY_ANER     0X06
-#define DM9000_PHY_DSCR     0X10
-#define DM9000_PHY_DSCSR    0X11
-#define DM9000_PHY_10BTCSR  0X12
-#define DM9000_PHY_PWDOR    0X13
-#define DM9000_PHY_SCR      0X14
+#define EPCR_REEP           (1<<5)
+#define EPCR_WEP            (1<<4)
+#define EPCR_EPOS           (1<<3)
+#define EPCR_ERPRR          (1<<2)
+#define EPCR_ERPRW          (1<<1)
+#define EPCR_ERRE           (1<<0)
 
-#define DM9000_PHY_ON        0x00                /* 设定 PHY 开启 */
-#define DM9000_PHY_OFF        0x01                /* 设定 PHY 关闭 */
-#define DM9000_RCR_SET        0x31                /* 设定 接收功能 (不收 CRC 及 超长包) */
-#define DM9000_TCR_SET        0x01                /* 设定 传送功能 */
-#define DM9000_RCR_OFF        0x00                /* 设定 接收功能关关闭设置 */
-#define DM9000_BPTR_SET       0x37                /* 设定 Back Pressure 条件设置 */
-#define DM9000_FCTR_SET       0x38                /* 设定 Flow Control 条件设置 */
-#define DM9000_TCR2_SET       0x80                /* 设置 LED 显示模式 */
-#define DM9000_OTCR_SET       0x80                /* 设置 DM9000 工作频率 0x80 = 100Mhz */
-#define DM9000_ETXCSR_SET     0x83                /* 设置 Early Tramsmit 条件设置 */
-#define DM9000_FCR_SET        0x28                /* 开启 网络流控功能设置 */
-#define DM9000_TCSCR_SET      0x07                /* 设定 CHECKSUM 传送运算 设置 */
-#define DM9000_RCSCSR_SET     0x03                /* 设定 CHECKSUM 接收检查 设置 */
-#define DM9000_IMR_SET        0x81                /* 设定 启用中断使能 条件设置 */
-#define DM9000_IMR_OFF        0x80                /* 设定 关闭中断使能 条件设置 */
+#define GPCR_GEP_CNTL       (1<<0)
 
+/* 原子例程 dm9000内部的phy寄存器 */
+#define DM9000_PHY_BMCR		0X00
+#define DM9000_PHY_BMSR		0X01
+#define DM9000_PHY_PHYID1	0X02
+#define DM9000_PHY_PHYID2	0X03
+#define DM9000_PHY_ANAR		0X04
+#define DM9000_PHY_ANLPAR	0X05
+#define DM9000_PHY_ANER		0X06
+#define DM9000_PHY_DSCR		0X10
+#define DM9000_PHY_DSCSR	0X11
+#define DM9000_PHY_10BTCSR	0X12
+#define DM9000_PHY_PWDOR	0X13
+#define DM9000_PHY_SCR		0X14
 
-int DM9000_Init(void);
-u16  DM9000_ReadReg(u16 reg);
-void DM9000_WriteReg(u16 reg,u16 data);
-u16  DM9000_PHY_ReadReg(u16 reg);
-void DM9000_PHY_WriteReg(u16 reg,u16 data);
-u32  DM9000_Get_DeiviceID(void);
-u8   DM9000_Get_SpeedAndDuplex(void);
-void DM9000_Set_PHYMode(u8 mode);
-void DM9000_Set_MACAddress(u8 *macaddr);
-void DM9000_Set_Multicast(u8 *multicastaddr);
-void DM9000_Reset(void);
-int dm9000_check_link_status(void);
-void DM9000_SendPacket(struct pbuf *p);
-struct pbuf *DM9000_Receive_Packet(void);
-int DM9000_Receive_Packet2(uint8_t *buf, int buf_size);
-void DMA9000_ISRHandler(void);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#endif  // _DM9000AEP_H
+int rt_hw_dm9000_init(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __DRV_DM9000_H__
