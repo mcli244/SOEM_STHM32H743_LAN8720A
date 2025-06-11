@@ -31,7 +31,7 @@ char *get_ip_addr(char *netif_name)
     return ip_addr;
 }
 
-
+int echo_disable = 0;
 void do_tcp_server_test(void)
 {
     int server_sock, client_sock;
@@ -39,6 +39,7 @@ void do_tcp_server_test(void)
     socklen_t addr_len;
     int ret;
     int cnt = 0;
+    uint32_t recv_total = 0;
 
     server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0)
@@ -97,8 +98,10 @@ void do_tcp_server_test(void)
         ret = recv(client_sock, buf, BUF_SIZE - 1, 0);
         if (ret > 0)
         {
+            recv_total += ret;
             buf[ret] = '\0';
-            send(client_sock, buf, ret, 0); // 回显
+            if(echo_disable == 0)
+                send(client_sock, buf, ret, 0); // 回显
 
             if (strcmp(buf, "exit") == 0)
             {
@@ -123,11 +126,32 @@ void do_tcp_server_test(void)
     closesocket(client_sock);
     closesocket(server_sock);
     rt_free(buf);
-    rt_kprintf("TCP server test finished, total received messages: %d\n", cnt);
+    rt_kprintf("TCP server test finished, total received messages: %d recv_total:%d\n", cnt, recv_total);
 }
 
-int tcp_server_test(void)
+int tcp_server_test(int argc, char **argv)
 {
+    
+    if (argc == 2)
+    {
+        if (strcmp(argv[1], "echo") == 0)
+        {
+            echo_disable = 0; // 启用回显
+            rt_kprintf("TCP server will echo messages back.\n");
+        }
+        else if (strcmp(argv[1], "noecho") == 0)
+        {
+            echo_disable = 1; // 禁用回显
+            rt_kprintf("TCP server will not echo messages back.\n");
+        }
+        else
+        {
+            rt_kprintf("Usage: tcp_server_test [echo|noecho]\n");
+            return -1;
+        }
+        
+    }
+    
   rt_thread_t tid;
   tid = rt_thread_create("tcp_server_test",
                          do_tcp_server_test,
@@ -161,6 +185,7 @@ void udp_server_test(void)
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len;
     int ret;
+    uint32_t recv_total = 0;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0)
@@ -198,12 +223,13 @@ void udp_server_test(void)
         ret = recvfrom(sockfd, buf, BUF_SIZE-1, 0, (struct sockaddr *)&client_addr, &addr_len);
         if (ret > 0)
         {
+            recv_total += ret;
             buf[ret] = '\0';
             // rt_kprintf("Received: %s\n", buf);
             sendto(sockfd, buf, ret, 0, (struct sockaddr *)&client_addr, addr_len); // Echo
             if(strcmp(buf, "exit") == 0)
             {
-                rt_kprintf("Client requested to close connection.\n");
+                rt_kprintf("Client requested to close connection. recv_total:%d\n", recv_total);
                 break; // Exit the loop if client sends "exit"
             }
         }
@@ -213,3 +239,88 @@ void udp_server_test(void)
 }
 MSH_CMD_EXPORT(udp_server_test, UDP server test);
 
+#include <rtthread.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <string.h>
+
+#define IPERF_PORT     5001
+#define BUFFER_SIZE    1460  /* typical TCP MSS */
+
+static void iperf_server_thread(void *arg)
+{
+    int sock_listen, sock_client;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    char *recv_buf;
+
+    recv_buf = rt_malloc(BUFFER_SIZE);
+    if (!recv_buf)
+    {
+        rt_kprintf("No memory for buffer\n");
+        return;
+    }
+
+    /* Create socket */
+    sock_listen = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock_listen < 0)
+    {
+        rt_kprintf("Socket create error\n");
+        rt_free(recv_buf);
+        return;
+    }
+
+    /* Bind */
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(IPERF_PORT);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sock_listen, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0)
+    {
+        rt_kprintf("Bind error\n");
+        closesocket(sock_listen);
+        rt_free(recv_buf);
+        return;
+    }
+
+    listen(sock_listen, 2);
+    rt_kprintf("iperf TCP server is listening on port %d...\n", IPERF_PORT);
+
+    while (1)
+    {
+        sock_client = accept(sock_listen, (struct sockaddr*)&client_addr, &addr_len);
+        if (sock_client < 0)
+        {
+            rt_kprintf("Accept error\n");
+            continue;
+        }
+
+        rt_kprintf("Accepted connection\n");
+
+        while (1)
+        {
+            int bytes = recv(sock_client, recv_buf, BUFFER_SIZE, 0);
+            if (bytes <= 0)
+            {
+                break;
+            }
+            // Optional: echo back
+            // send(sock_client, recv_buf, bytes, 0);
+        }
+
+        closesocket(sock_client);
+        rt_kprintf("Connection closed\n");
+    }
+}
+
+int start_iperf_server(void)
+{
+    rt_thread_t tid = rt_thread_create("iperf_srv", iperf_server_thread,
+                                       RT_NULL, 2048, 20, 10);
+    if (tid)
+        rt_thread_startup(tid);
+    return 0;
+}
+MSH_CMD_EXPORT(start_iperf_server, Start TCP iperf server);

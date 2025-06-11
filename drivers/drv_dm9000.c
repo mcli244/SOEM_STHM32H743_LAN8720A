@@ -595,6 +595,7 @@ struct pbuf *rt_dm9000_rx(rt_device_t dev)
 
         /* allocate buffer */
         // p = pbuf_alloc(PBUF_LINK, rx_len, PBUF_RAM);
+        rx_len -= 4; // remove 4B CRC
         p = pbuf_alloc(PBUF_RAW, rx_len, PBUF_POOL);
         if (p != RT_NULL)
         {
@@ -603,8 +604,8 @@ struct pbuf *rt_dm9000_rx(rt_device_t dev)
                 /* p is one large chunk */
 //                int i;
 
-                RT_ASSERT(p->next == RT_NULL);
-                RT_ASSERT(p->len == p->tot_len);
+                // RT_ASSERT(p->next == RT_NULL);
+                // RT_ASSERT(p->len == p->tot_len);
 
                 data = (rt_uint16_t*)p->payload;
                 len = p->len;
@@ -622,8 +623,9 @@ struct pbuf *rt_dm9000_rx(rt_device_t dev)
                     dummy_u8 = (u8)DM9000_DATA;
                     ((rt_uint8_t*)p->payload)[p->len - 1] = dummy_u8;
                 }
-                
-                p->len -= 4;
+
+                dummy_u16 = DM9000_DATA;
+                dummy_u16 = DM9000_DATA;
 
             // } else { /* p is not one large chunk */
             //     struct pbuf* q;
